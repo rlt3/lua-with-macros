@@ -118,6 +118,7 @@ lmacro_get (int t, LexState *ls, SemInfo *seminfo)
 
     /* let Lua itself handle its own input buffer memory */
     ls->z->p = getstr(luaX_newstring(ls, buff, replace_len));
+    ls->z->n = replace_len;
     free(buff);
 
     /* consume the macro identifier (which we don't replace, but skip) */
