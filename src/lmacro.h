@@ -78,6 +78,8 @@ lmacro_replace (LexState *ls, const char *name, const char *replace)
     const char *p = ls->z->p;
     int num_replacements = 0;
 
+    ((char*)ls->z->p)[ls->z->n] = '\0';
+
     while (p && (p = strstr(p, name))) {
         num_replacements++;
         p += name_len;
@@ -97,7 +99,7 @@ lmacro_replace (LexState *ls, const char *name, const char *replace)
         for (s = last_p, slen = 0; s && s != p; s++, slen++) ;
         strncat(buff, last_p, slen);
         strncat(buff, replace, rplc_len);
-        p = p + name_len;
+        p += name_len;
         last_p = p;
     }
     for (s = last_p, slen = 0; s && *s != '\0'; s++, slen++) ;
