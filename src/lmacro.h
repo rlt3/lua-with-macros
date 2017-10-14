@@ -70,6 +70,46 @@ next_lmacro (LexState *ls, SemInfo *seminfo)
     return lmacro_llex(ls, seminfo);
 }
 
+static void
+lmacro_replace (LexState *ls, const char *name, const char *replace)
+{
+    const int name_len = strlen(name);
+    const int rplc_len = strlen(replace);
+    const char *p = ls->z->p;
+    int num_replacements = 0;
+
+    while (p && (p = strstr(p, name))) {
+        num_replacements++;
+        p = p + name_len - 1;
+    }
+
+    const int len = ls->z->n + ((rplc_len - name_len) * num_replacements);
+    char *buff = calloc(len, sizeof(char*));
+
+    p = ls->z->p;
+    const char *last_p = p;
+    const char *s;
+    int slen;
+    int n;
+
+    for (n = 0; n < num_replacements; n++) {
+        p = strstr(p, name);
+        for (s = last_p, slen = 0; s && s != p; s++, slen++) ;
+        strncat(buff, last_p, slen);
+        p = p + name_len - 1;
+        last_p = p;
+    }
+    for (s = last_p, slen = 0; s && *s != '\0'; s++, slen++) ;
+    strncat(buff, last_p, slen);
+
+    printf("%d replacements for %s. Old len %d, new len %d\n",
+            num_replacements, name, ls->z->n, len);
+
+    printf("[[ %s ]]\n", buff);
+
+    free(buff);
+}
+
 static int
 lmacro_define (int t, LexState *ls, SemInfo *seminfo)
 {
@@ -87,7 +127,11 @@ lmacro_define (int t, LexState *ls, SemInfo *seminfo)
     lmacro_lua_getmacrotable(ls->L);
     lmacro_lua_setmacro(ls->L, name, def);
 
-    return next_lmacro(ls, seminfo);
+    t = next_lmacro(ls, seminfo);
+    lmacro_replace(ls, name, def);
+    return t;
+
+    //return next_lmacro(ls, seminfo);
 }
 
 static int
@@ -128,17 +172,33 @@ exit:
     return t;
 }
 
+/*
+ * TODO:
+ * 
+ *  - Replace lmacro_get's name-token-as-hash-key lookup with a find-and-replace
+ *  using strstr over input buffer as it is updated. Input buffer is not loaded
+ *  all at once so we need some sort of mechanism in place that lets us know
+ *  when it will be updated. Currently when ls->z->n - 1 == 0 is when it is 
+ *  update, so we can set a flag.
+ *
+ *  - Think of implications of nested macros.
+ *
+ *  - Think of implications of using this method to replace macros with 
+ *  expansions where code isn't simple function-call lookalikes.
+ */
+
 static int
 lmacro_llex (LexState *ls, SemInfo *seminfo)
 {
     int t = llex(ls, seminfo);
     switch (t) {
         case TK_MACRO:
+            // printf("[[ %s ]]\n", ls->z->p);
             t = lmacro_define(t, ls, seminfo);
             break;
 
         case TK_NAME:
-            t = lmacro_get(t, ls, seminfo);
+            // t = lmacro_get(t, ls, seminfo);
             break;
     }
     return t;
