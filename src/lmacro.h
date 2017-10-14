@@ -80,7 +80,7 @@ lmacro_replace (LexState *ls, const char *name, const char *replace)
 
     while (p && (p = strstr(p, name))) {
         num_replacements++;
-        p = p + name_len - 1;
+        p += name_len;
     }
 
     const int len = ls->z->n + ((rplc_len - name_len) * num_replacements);
@@ -96,16 +96,15 @@ lmacro_replace (LexState *ls, const char *name, const char *replace)
         p = strstr(p, name);
         for (s = last_p, slen = 0; s && s != p; s++, slen++) ;
         strncat(buff, last_p, slen);
-        p = p + name_len - 1;
+        strncat(buff, replace, rplc_len);
+        p = p + name_len;
         last_p = p;
     }
     for (s = last_p, slen = 0; s && *s != '\0'; s++, slen++) ;
     strncat(buff, last_p, slen);
 
-    printf("%d replacements for %s. Old len %d, new len %d\n",
-            num_replacements, name, ls->z->n, len);
-
-    printf("[[ %s ]]\n", buff);
+    ls->z->p = getstr(luaX_newstring(ls, buff, len));
+    ls->z->n = len;
 
     free(buff);
 }
@@ -127,11 +126,8 @@ lmacro_define (int t, LexState *ls, SemInfo *seminfo)
     lmacro_lua_getmacrotable(ls->L);
     lmacro_lua_setmacro(ls->L, name, def);
 
-    t = next_lmacro(ls, seminfo);
     lmacro_replace(ls, name, def);
-    return t;
-
-    //return next_lmacro(ls, seminfo);
+    return next_lmacro(ls, seminfo);
 }
 
 static int
