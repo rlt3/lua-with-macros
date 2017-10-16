@@ -23,8 +23,15 @@ lmacro_lua_getmacrotable (lua_State *L)
 static inline void 
 lmacro_lua_setmacro (lua_State *L, const char *name, const char *definition)
 {
+    size_t len = lua_rawlen(L, -1);
+
+    lua_newtable(L);
+    lua_pushstring(L, name);
+    lua_rawseti(L, -2, 1);
     lua_pushstring(L, definition);
-    lua_setfield(L, -2, name);
+    lua_rawseti(L, -2, 2);
+
+    lua_rawseti(L, -2, ++len);
     lua_pop(L, 1);
 }
 
@@ -132,6 +139,34 @@ lmacro_replace (LexState *ls, const char *name, const char *replace)
     free(buff);
 }
 
+static void
+lmacro_updatebuffer (LexState *ls, SemInfo *seminfo)
+{
+    lua_State *L = ls->L;
+    const char *name, *definition;
+
+    lmacro_lua_getmacrotable(L);
+    for (int i = 1 ;; i++) {
+        lua_rawgeti(L, -1, i);
+        if (lua_isnil(L, -1)) {
+            lua_pop(L, 1);
+            break;
+        }
+
+        lua_rawgeti(L, -1, 1);
+        name = lua_tostring(L, -1);
+        lua_pop(L, 1);
+
+        lua_rawgeti(L, -1, 2);
+        definition = lua_tostring(L, -1);
+        lua_pop(L, 1);
+
+        lua_pop(L, 1);
+        lmacro_replace(ls, name, definition);
+    }
+    lua_pop(L, 1);
+}
+
 static int
 lmacro_define (int t, LexState *ls, SemInfo *seminfo)
 {
@@ -209,10 +244,14 @@ exit:
 static int
 lmacro_llex (LexState *ls, SemInfo *seminfo)
 {
+    if (ls->z->l) {
+        lmacro_updatebuffer(ls, seminfo);
+        ls->z->l = 0;
+    }
+
     int t = llex(ls, seminfo);
     switch (t) {
         case TK_MACRO:
-            // printf("[[ %s ]]\n", ls->z->p);
             t = lmacro_define(t, ls, seminfo);
             break;
 
