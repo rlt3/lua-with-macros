@@ -70,44 +70,65 @@ next_lmacro (LexState *ls, SemInfo *seminfo)
     return lmacro_llex(ls, seminfo);
 }
 
+/* strnstr with a twist -- set len it took to find subtstr */
+static const char *
+lmacro_findsubstr (const char *hay, const int haylen,
+                   const char *ndl, const int ndllen,
+                   int *len)
+{
+    *len = 0;
+    if (ndllen > haylen)
+        return NULL;
+    while (strncmp(hay, ndl, ndllen) != 0) {
+        hay++;
+        (*len)++;
+        if (!hay || *len > haylen)
+            return NULL;
+    }
+    return hay;
+}
+
 static void
 lmacro_replace (LexState *ls, const char *name, const char *replace)
 {
     const int name_len = strlen(name);
     const int rplc_len = strlen(replace);
     const char *p = ls->z->p;
+    int plen = ls->z->n;
     int num_replacements = 0;
+    int dst = 0;
+    char *buff = NULL;
+    int bufflen = 0;
 
+    /* lua doesn't mark the end of the input buffer as '\0' */
     ((char*)ls->z->p)[ls->z->n] = '\0';
 
-    while (p && (p = strstr(p, name))) {
+    /* find all replacements first rather than guess about memory */
+    while (p && (p = lmacro_findsubstr(p, plen, name, name_len, &dst))) {
         num_replacements++;
         p += name_len;
+        plen -= dst + name_len;
     }
 
-    const int len = ls->z->n + ((rplc_len - name_len) * num_replacements);
-    char *buff = calloc(len, sizeof(char*));
-
+    /* then actually do the replacments on the buffer */
+    bufflen = ls->z->n + ((rplc_len - name_len) * num_replacements);
+    buff = calloc(bufflen, sizeof(char*));
     p = ls->z->p;
-    const char *last_p = p;
-    const char *s;
-    int slen;
-    int n;
+    plen = ls->z->n;
+    dst = 0;
 
-    for (n = 0; n < num_replacements; n++) {
-        p = strstr(p, name);
-        for (s = last_p, slen = 0; s && s != p; s++, slen++) ;
-        strncat(buff, last_p, slen);
+    for (int n = 0; n < num_replacements; n++) {
+        p = lmacro_findsubstr(p, plen, name, name_len, &dst);
+        strncat(buff, p - dst, dst);
         strncat(buff, replace, rplc_len);
         p += name_len;
-        last_p = p;
+        plen -= dst + name_len;
     }
-    for (s = last_p, slen = 0; s && *s != '\0'; s++, slen++) ;
-    strncat(buff, last_p, slen);
+    strncat(buff, p, plen);
 
-    ls->z->p = getstr(luaX_newstring(ls, buff, len));
-    ls->z->n = len;
-
+    /* use Lua's mem so it can handle its own input buffer */
+    ls->z->p = getstr(luaX_newstring(ls, buff, bufflen));
+    ls->z->n = bufflen;
     free(buff);
 }
 
