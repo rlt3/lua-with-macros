@@ -108,6 +108,7 @@ lmacro_replace (LexState *ls, const char *name, const char *replace)
     int bufflen = 0;
 
     /* lua doesn't mark the end of the input buffer as '\0' */
+    char c = ls->z->p[ls->z->n];
     ((char*)ls->z->p)[ls->z->n] = '\0';
 
     /* find all replacements first rather than guess about memory */
@@ -137,6 +138,8 @@ lmacro_replace (LexState *ls, const char *name, const char *replace)
     ls->z->p = getstr(luaX_newstring(ls, buff, bufflen));
     ls->z->n = bufflen;
     free(buff);
+
+    ((char*)ls->z->p)[ls->z->n] = c;
 }
 
 static void
@@ -239,6 +242,14 @@ exit:
  *
  *  - Think of implications of using this method to replace macros with 
  *  expansions where code isn't simple function-call lookalikes.
+ *
+ *  - FIX bug in REPL where first character gets consumed from input buffer so
+ *  macros at beginning of line won't be replaced.
+ *  > macro FUN [[ function ]]
+ *  > FUN e () return 10 end
+ *  error
+ *  >  FUN e () return 10 end
+ *  OK
  */
 
 static int
