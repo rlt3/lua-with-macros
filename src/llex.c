@@ -28,43 +28,6 @@
 #include "lzio.h"
 
 
-
-//#define next(ls) (ls->current = zgetc(ls->z))
-//#define next(ls) (putchar(ls->current), (ls->current = zgetc(ls->z)))
-
-#include <stdio.h>
-#include <stdlib.h>
-
-static void
-next (LexState *ls)
-{
-    static char buff[BUFSIZ];
-    static char *p = NULL;
-
-    if (ls->z->n == 5) {
-        for (int i = 0; ls->current != EOZ && i < 10; i++) {
-            ls->current = zgetc(ls->z);
-            buff[i] = ls->current;
-        }
-        p = buff;
-    }
-
-    if (p) {
-        if (*p == EOZ) {
-            printf("\n");
-            p = NULL;
-            ls->current = EOZ;
-        }
-        else {
-            ls->current = *(p++);
-            printf("%c", ls->current);
-        }
-    }
-    else {
-        ls->current = zgetc(ls->z);
-    }
-}
-
 #define currIsNewline(ls)	(ls->current == '\n' || ls->current == '\r')
 
 
@@ -85,6 +48,55 @@ static const char *const luaX_tokens [] = {
 
 
 static l_noret lexerror (LexState *ls, const char *msg, int token);
+
+
+#include "lmacro.h"
+
+
+static void
+next (LexState *ls)
+{
+    static char buff[BUFSIZ] = {'\0'};
+    static char *p = NULL;
+
+    //int i = 0;
+    //lmacro_lua_getmacrotable (ls->L);
+    //for (; ls->current != EOZ && lmacro_ispartial(ls->L, ls->current); i++) {
+    //    ls->current = zgetc(ls->z);
+    //    buff[i] = ls->current;
+    //}
+    //if (!lua_isnil(ls->L, -1)) {
+    //    const char *str = lua_tostring(ls->L, -1);
+    //    printf("TRANSFORMED: %s\n", str);
+    //} 
+    //if (i > 0) {
+    //    p = buff;
+    //}
+    //lua_pop(ls->L, i + 1);
+
+getc:
+    if (!p) {
+        ls->current = zgetc(ls->z);
+        /* test macro replacement */
+        if (ls->current == 'Z') {
+            strncpy(buff, "test(7)", 8);
+            p = buff;
+        }
+    }
+
+    if (p) {
+        ls->current = *(p++);
+        if (ls->current == '\0') {
+            p = NULL;
+            goto getc;
+        }
+    }
+
+    if (ls->current == EOZ)
+        printf("\n");
+    else
+        printf("%c", ls->current);
+}
 
 
 static void save (LexState *ls, int c) {
@@ -205,6 +217,14 @@ void luaX_setinput (lua_State *L, LexState *ls, ZIO *z, TString *source,
   ls->source = source;
   ls->envn = luaS_newliteral(L, LUA_ENV);  /* get env name */
   luaZ_resizebuffer(ls->L, ls->buff, LUA_MINBUFFER);  /* initialize buffer */
+
+  /* 
+   * rollback the ZIO buffer a single character (that was advanced in ldo.c) so
+   * we can do macro replacements that include the first character
+   */
+  ls->z->n++;
+  ls->z->p--;
+  next(ls);
 }
 
 
@@ -578,7 +598,7 @@ static int llex (LexState *ls, SemInfo *seminfo) {
   }
 }
 
-#include "lmacro.h"
+#define llex lmacro_llex
 
 void luaX_next (LexState *ls) {
   ls->lastline = ls->linenumber;
