@@ -38,35 +38,29 @@
 static void
 next (LexState *ls)
 {
-    static char *buff = NULL;
+    static char buff[BUFSIZ];
     static char *p = NULL;
-    static int size = 0;
+
     if (ls->z->n == 5) {
-        buff = calloc(BUFSIZ, sizeof(char));
-        puts("LOOKAHEAD!!:");
         for (int i = 0; ls->current != EOZ && i < 10; i++) {
             ls->current = zgetc(ls->z);
-            buff[size] = ls->current;
-            size++;
+            buff[i] = ls->current;
         }
-        for (int i = 0; i < size; i++)
-            printf("%c", buff[i]);
         p = buff;
     }
-    if (buff) {
+
+    if (p) {
         if (*p == EOZ) {
-            free(buff);
-            size = 0;
-            buff = NULL;
+            printf("\n");
             p = NULL;
             ls->current = EOZ;
         }
         else {
             ls->current = *(p++);
+            printf("%c", ls->current);
         }
     }
     else {
-        //putchar(ls->current);
         ls->current = zgetc(ls->z);
     }
 }
