@@ -87,29 +87,17 @@ next (LexState *ls)
             goto setchar;
     }
 
-    if (c == EOZ) {
-        has_buff = 0;
-        has_replace = 0;
-        i = 0;
-        goto setchar;
-    }
-
     if (!(has_replace || has_buff))
         c = zgetc(ls->z);
 
     lmacro_lua_getmacrotable(ls->L);
     if (lmacro_ispartial(ls->L, c)) {
         size_t j = i;
-
-        /*
-         * the EOZ char is allowed to be written to the buffer first before
-         * breaking so that EOZ can be caught early and readily returned.
-         */
-
         do {
             /* if the buffer isn't active then append to our buffer */
             if (!has_buff) { /* implicitly j starts at 0 */
                 buff[j] = c;
+                /* always write EOZ to buffer because no sentinels after EOZ */
                 if (c == EOZ)
                     break;
                 c = zgetc(ls->z);
@@ -141,12 +129,11 @@ next (LexState *ls)
             buff[i] = '\0';
             has_replace = 1;
             i = 0;
-            buffnextchar(c);
         }
         /* There's no replacement. */
         else {
             if (!has_buff) {
-                buff[j] = c; /* lookahead char that failed ispartial */
+                buff[j] = c; /* current c is lookahead that failed ispartial */
                 buff[j + 1] = '\0';
                 has_buff = 1;
                 i = 0;
@@ -157,8 +144,8 @@ next (LexState *ls)
              */
                 i -= 1;
             }
-            buffnextchar(c);
         }
+        buffnextchar(c);
     }
     lua_pop(ls->L, 1);
 
