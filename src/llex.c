@@ -65,30 +65,26 @@ static l_noret lexerror (LexState *ls, const char *msg, int token);
 static void
 next (LexState *ls)
 {
+#define buffnextchar(a) \
+    if (i + 1 >= BUFSIZ) \
+        lexerror(ls, "Macro replacement is too long!", 0); \
+    a = buff[i++]; \
+    if (a == '\0') { \
+        has_replace = 0; \
+        has_buff = 0; \
+        i = 0; \
+    }
+
     static char buff[BUFSIZ] = {'\0'};
     static int has_buff = 0;
     static int has_replace = 0;
     static size_t i = 0;
     char c = '\0';
 
-getchar:
-    if (has_replace) {
-        c = buff[i++];
-        if (c == '\0') {
-            has_replace = 0;
-            has_buff = 0;
-            i = 0;
-        } else {
+    if (has_replace || has_buff) {
+        buffnextchar(c);
+        if (has_replace && c != '\0')
             goto setchar;
-        }
-    }
-    else if (has_buff) {
-        c = buff[i++];
-        if (c == '\0') {
-            has_buff = 0;
-            has_replace = 0;
-            i = 0;
-        }
     }
 
     if (c == EOZ) {
@@ -98,33 +94,37 @@ getchar:
         goto setchar;
     }
 
-    if (!(has_replace || has_buff)) {
+    if (!(has_replace || has_buff))
         c = zgetc(ls->z);
-    }
 
     lmacro_lua_getmacrotable(ls->L);
     if (lmacro_ispartial(ls->L, c)) {
         size_t j = i;
 
+        /*
+         * the EOZ char is allowed to be written to the buffer first before
+         * breaking so that EOZ can be caught early and readily returned.
+         */
+
         do {
-            if (c == EOZ)
-                break;
             /* if the buffer isn't active then append to our buffer */
-            if (!has_buff) {
-                /* j starts at 0 */
+            if (!has_buff) { /* implicitly j starts at 0 */
                 buff[j] = c;
-                buff[j + 1] = '\0';
+                if (c == EOZ)
+                    break;
                 c = zgetc(ls->z);
-            } else {
+            }
             /* the buffer is active, read from it. if buff ends, then append */
-                if (buff[j] == '\0') {
+            else {
+                if (buff[j] != '\0') {
+                    c = buff[j];
+                } else {
                     c = zgetc(ls->z);
                     buff[j] = c;
                     buff[j + 1] = '\0';
                 }
-                else {
-                    c = buff[j];
-                }
+                if (c == EOZ)
+                    break;
             }
             j++;
         } while (lmacro_ispartial(ls->L, c)); 
@@ -141,8 +141,7 @@ getchar:
             buff[i] = '\0';
             has_replace = 1;
             i = 0;
-            lua_pop(ls->L, 1); /* string */
-            goto getchar;
+            buffnextchar(c);
         }
         /* There's no replacement. */
         else {
@@ -150,17 +149,15 @@ getchar:
                 buff[j] = c; /* lookahead char that failed ispartial */
                 buff[j + 1] = '\0';
                 has_buff = 1;
-            }
-            /* 
-             * The char at the current `i' failed matching. So we set the char
-             * at `i' to ls->current and move `i' ahead.
-             */
-            c = buff[i++];
-            if (c == '\0') {
-                has_buff = 0;
-                has_replace = 0;
                 i = 0;
+            } else {
+            /* 
+             * roll `i' back to get previous character that started the faied
+             * macro replacement sequence.
+             */
+                i -= 1;
             }
+            buffnextchar(c);
         }
     }
     lua_pop(ls->L, 1);
