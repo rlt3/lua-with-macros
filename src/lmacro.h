@@ -48,6 +48,8 @@ static int
 lmacro_ispartial (lua_State *L, char c)
 {
     static char key[2] = {'\0'};
+    if (c == EOZ)
+        return 0;
     key[0] = c;
     lua_getfield(L, -1, key);
     lua_insert(L, -2);
