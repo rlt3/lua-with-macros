@@ -54,3 +54,8 @@ dkms.conf
 # Editor
 *.swp
 *.swo
+
+# Lua
+src/lua
+src/luac
+test.*
