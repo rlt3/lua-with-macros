@@ -52,60 +52,122 @@ static l_noret lexerror (LexState *ls, const char *msg, int token);
 
 #include "lmacro.h"
 
-
+/*
+ * Sets ls->current to the next character from the input buffer.
+ * If a char read is a partial match to a macro string then read ahead more
+ * characters into a temp buffer.
+ * If those characters match a macro, then the buffer is set to the replacement
+ * and the tmp buffer is read until the nil char \0.
+ * If the read ahead characters don't match a replacement then those characters
+ * are read from the tmp buffer one at a time and are then tested again to see
+ * if they are apart of a macro string.
+ */
 static void
 next (LexState *ls)
 {
     static char buff[BUFSIZ] = {'\0'};
-    static char *p = NULL;
+    static int has_buff = 0;
+    static int has_replace = 0;
+    static size_t i = 0;
+    char c = '\0';
 
-getc:
-    if (!p) {
-        size_t i = 1;
-        ls->current = zgetc(ls->z);
-
-        buff[0] = ls->current;
-        lmacro_lua_getmacrotable(ls->L);
-        /* 
-         * !table is sentinel value telling us either full has been found 
-         * (string) or nothing was found (nil)
-         */
-        while (ls->current != EOZ && lua_istable(ls->L, -1)) {
-            if (lmacro_ispartial(ls->L, ls->current)) {
-                ls->current = zgetc(ls->z);
-                buff[i++] = ls->current;
-            }
+getchar:
+    if (has_replace) {
+        c = buff[i++];
+        if (c == '\0') {
+            has_replace = 0;
+            has_buff = 0;
+            i = 0;
+        } else {
+            goto setchar;
         }
+    }
+    else if (has_buff) {
+        c = buff[i++];
+        if (c == '\0') {
+            has_buff = 0;
+            has_replace = 0;
+            i = 0;
+        }
+    }
+
+    if (c == EOZ) {
+        has_buff = 0;
+        has_replace = 0;
+        i = 0;
+        goto setchar;
+    }
+
+    if (!(has_replace || has_buff)) {
+        c = zgetc(ls->z);
+    }
+
+    lmacro_lua_getmacrotable(ls->L);
+    if (lmacro_ispartial(ls->L, c)) {
+        size_t j = i;
+
+        do {
+            if (c == EOZ)
+                break;
+            /* if the buffer isn't active then append to our buffer */
+            if (!has_buff) {
+                /* j starts at 0 */
+                buff[j] = c;
+                buff[j + 1] = '\0';
+                c = zgetc(ls->z);
+            } else {
+            /* the buffer is active, read from it. if buff ends, then append */
+                if (buff[j] == '\0') {
+                    c = zgetc(ls->z);
+                    buff[j] = c;
+                    buff[j + 1] = '\0';
+                }
+                else {
+                    c = buff[j];
+                }
+            }
+            j++;
+        } while (lmacro_ispartial(ls->L, c)); 
+
+        /* we found a replacement */
         if (lua_isstring(ls->L, -1)) {
             const char *str = lua_tolstring(ls->L, -1, &i);
-            strncpy(buff, str, i);
-            buff[i] = ls->current;
-            buff[i + 1] = '\0';
-            p = buff;
-        }
-        else if (i > 1) {
             /* 
-             * Even if macro wasn't found, must read from buff the characters
-             * from zgetc.
+             * Replace entire buffer with macro replacement. The current c
+             * value is apart of the macro string so we don't need to include
+             * it.
              */
-            p = buff;
+            strncpy(buff, str, i);
             buff[i] = '\0';
+            has_replace = 1;
+            i = 0;
+            lua_pop(ls->L, 1); /* string */
+            goto getchar;
         }
-        lua_pop(ls->L, 1);
-    }
-
-    if (p) {
-        ls->current = *(p++);
-        if (ls->current == '\0') {
-            p = NULL;
-            goto getc;
+        /* There's no replacement. */
+        else {
+            if (!has_buff) {
+                buff[j] = c; /* lookahead char that failed ispartial */
+                buff[j + 1] = '\0';
+                has_buff = 1;
+            }
+            /* 
+             * The char at the current `i' failed matching. So we set the char
+             * at `i' to ls->current and move `i' ahead.
+             */
+            c = buff[i++];
+            if (c == '\0') {
+                has_buff = 0;
+                has_replace = 0;
+                i = 0;
+            }
         }
     }
+    lua_pop(ls->L, 1);
 
-    if (ls->current == EOZ)
-        printf("\n");
-    else
-        printf("%c", ls->current);
+setchar:
+    ls->current = c;
+    return;
 }
 
 

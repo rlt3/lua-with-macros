@@ -39,7 +39,28 @@ lmacro_lua_getmacrotable (lua_State *L)
     }
 }
 
-/* Set a macro and clean the stack */
+/* 
+ * Expects a table on top of the stack. If the table has the key "%c\0",
+ * returns 1, else 0. This function removes the table from the top of the stack
+ * and replaces it with whatever is pushed from looking up the key.
+ */
+static int
+lmacro_ispartial (lua_State *L, char c)
+{
+    static char key[2] = {'\0'};
+    key[0] = c;
+    lua_getfield(L, -1, key);
+    lua_insert(L, -2);
+    lua_pop(L, 1);
+    return lua_istable(L, -1);
+}
+
+/*
+ * Setup the hash tables for a particular defintion. Each character gets its
+ * own table. The first character is always in the macro table itself. As an
+ * example with the macro form ``macro DEFINE [[macro]]'' then the macro table
+ * is setup as ``__macro["D"]["E"]["F"]["I"]["E"] = "macro"''
+ */
 static inline void 
 lmacro_lua_setmacro (lua_State *L, const char *name, const char *definition)
 {
@@ -61,26 +82,12 @@ lmacro_lua_setmacro (lua_State *L, const char *name, const char *definition)
     lua_pop(L, 1);
 }
 
-/* 
- * Expects a table on top of the stack. If the table has the key "%c\0",
- * returns 1, else 0. This function removes the table from the top of the stack
- * and replaces it with whatever is pushed from looking up the key.
+/*
+ * Parse a macro form. Right now this is simply the most basic form of:
+ * macro <name> <string>
  */
 static int
-lmacro_ispartial (lua_State *L, char c)
-{
-    static char key[2] = {'\0'};
-    int ret;
-    key[0] = c;
-    lua_getfield(L, -1, key);
-    ret = !lua_isnil(L, -1);
-    lua_insert(L, -2);
-    lua_pop(L, 1);
-    return ret;
-}
-
-static int
-lmacro_define (int t, LexState *ls, SemInfo *seminfo)
+lmacro_define (LexState *ls, SemInfo *seminfo)
 {
     const char *name = NULL;
     const char *def = NULL;
@@ -99,23 +106,13 @@ lmacro_define (int t, LexState *ls, SemInfo *seminfo)
     return next_lmacro(ls, seminfo);
 }
 
-/*
- * TODO:
- *
- *  - Think of implications of nested macros.
- *
- *  - Think of implications of using this method to replace macros with 
- *  expansions where code isn't simple function-call lookalikes.
- *
- */
-
 static int
 lmacro_llex (LexState *ls, SemInfo *seminfo)
 {
     int t = llex(ls, seminfo);
     switch (t) {
         case TK_MACRO:
-            t = lmacro_define(t, ls, seminfo);
+            t = lmacro_define(ls, seminfo);
             break;
     }
     return t;
