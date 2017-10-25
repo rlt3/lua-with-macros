@@ -130,6 +130,38 @@ next (LexState *ls)
             has_replace = 1;
             i = 0;
         }
+        else if (lua_isfunction(ls->L, -1)) {
+            const char *str = NULL;
+            int args = 0;
+
+            if ((c = zgetc(ls->z)) != '(')
+                lexerror(ls, "Expected '(' to start argument list", 0);
+
+            for (i = 0, c = zgetc(ls->z) ;; i++, c = zgetc(ls->z)) {
+                if (c == ',' || c == ')') {
+                    buff[i] = '\0';
+                    lua_pushstring(ls->L, buff);
+                    i = -1;
+                    args++;
+                    if (c == ')')
+                        break;
+                    else
+                        continue;
+                }
+                buff[i] = c;
+            }
+
+            if (lua_pcall(ls->L, args, 1, 0)) {
+                str = lua_tostring(ls->L, -1);
+                lexerror(ls, str, TK_MACRO);
+            }
+
+            str = lua_tolstring(ls->L, -1, &i);
+            strncpy(buff, str, i);
+            buff[i] = '\0';
+            has_replace = 1;
+            i = 0;
+        }
         /* There's no replacement. */
         else {
             if (!has_buff) {
