@@ -138,6 +138,9 @@ next (LexState *ls)
                 lexerror(ls, "Expected '(' to start argument list", 0);
 
             for (i = 0, c = zgetc(ls->z) ;; i++, c = zgetc(ls->z)) {
+                if (c == EOZ)
+                    lexerror(ls, "Missing ')' to close argument list", TK_EOS);
+
                 if (c == ',' || c == ')') {
                     buff[i] = '\0';
                     lua_pushstring(ls->L, buff);
@@ -148,8 +151,12 @@ next (LexState *ls)
                     else
                         continue;
                 }
+
                 buff[i] = c;
             }
+
+            if (c != ')')
+                lexerror(ls, "Missing ')' to close argument list", 0);
 
             if (lua_pcall(ls->L, args, 1, 0)) {
                 str = lua_tostring(ls->L, -1);

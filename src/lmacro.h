@@ -160,7 +160,6 @@ lmacro_functionform (const char *name, LexState *ls, SemInfo *seminfo)
     buffer[i] = '\0';
 
     buff_append(ret_form);
-    //buff_append(name);
 
     for (;;) {
         /* if `t' is a bonafide token instead of just a char */
@@ -204,6 +203,10 @@ lmacro_functionform (const char *name, LexState *ls, SemInfo *seminfo)
                 i += 2;
             }
         }
+        if (str)
+            printf("%s | ", str);
+        printf("%c | parens: %d | ends: %d\n", ls->current, parens, ends);
+
         /* regardless of having a token, we always push the current char */
         if (ls->current == '(')
             parens++;
@@ -241,24 +244,59 @@ lmacro_functionform (const char *name, LexState *ls, SemInfo *seminfo)
 }
 
 /*
- * Parse a macro form. Right now this is simply the most basic form of:
- * macro <name> <string>
+ * Parse a macro form.
+ * Simple macro: macro <name> <string>
+ * Function macro: macro <name> ([args|,]+) [<expr>]+ end
  */
 static int
 lmacro_define (LexState *ls, SemInfo *seminfo)
 {
     const char *name = NULL;
+    int t = next_llex(ls, seminfo);
 
-    if (next_llex(ls, seminfo) != TK_NAME)
+    if (t != TK_NAME)
         lexerror(ls, "Expected macro name in macro form", TK_MACRO);
     name = getstr(seminfo->ts);
 
-    skipwhitespace(ls);
-    
     if (ls->current != '(')
         return lmacro_simpleform(name, ls, seminfo);
-    else
-        return lmacro_functionform(name, ls, seminfo);
+    else {
+        const char *str = NULL;
+        for (;;) {
+            str = NULL;
+            switch (t) {
+                case ')': str = ")"; break;
+                case '(': str = "("; break;
+                case '+': str = "+"; break;
+                case '/': str = "/"; break;
+                case '*': str = "*"; break;
+
+                /* all the reserved keywords and symbols */
+                case TK_GOTO: case TK_IF: case TK_IN: case TK_LOCAL:
+                case TK_NIL: case TK_NOT: case TK_OR: case TK_REPEAT:
+                case TK_RETURN: case TK_THEN: case TK_TRUE: case TK_UNTIL:
+                case TK_WHILE: case TK_MACRO: case TK_IDIV: case TK_CONCAT:
+                case TK_DOTS: case TK_EQ: case TK_GE: case TK_LE:
+                case TK_NE: case TK_SHL: case TK_SHR: case TK_DBCOLON:
+                case TK_EOS:
+                    str = luaX_tokens[t - FIRST_RESERVED];
+                    break;
+                /* numbers, names, and strings */
+                default:
+                    str = getstr(seminfo->ts);
+                    break;
+            }
+
+            printf("%s | %c\n", str, ls->current);
+
+            t = next_llex(ls, seminfo);
+
+            if (t == TK_EOS)
+                break;
+        }
+        return t;
+        //return lmacro_functionform(name, ls, seminfo);
+    }
 }
 
 static int
