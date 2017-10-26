@@ -128,105 +128,111 @@ lmacro_simpleform (const char *name, LexState *ls, SemInfo *seminfo)
     return next_lmacro(ls, seminfo);
 }
 
-
 /*
- * simple macro functions are simply functions which accept an argument
- * list that a basic reader macro function reads in from the input. Reading
- * in input from Lua requires pushing a cfunction which has the current
- * lexical scope in that cfunction scope somehow (either through C or 
- * through a lua global value).
- * When the ispartial returns a function and the current matching string 
- * isn't in the reader macro list then that function is pushed to the 
- * special reader function. That function simply looks for a form of 
- * ([<anything except ','|,]+). It parses these arguments and passes them
- * into the function passed to THE READEr.
+ * Read the function macro function as an anonymous function into Lua. Let Lua
+ * compile the function as a string and output any errors. We simply uses a 
+ * combination of the lexer, char tokens, and string representations of
+ * reserved keywords to build the function while also parsing it.
+ * Uses the name of the macro and pushes each letter as a key to a new table
+ * until the final letter which points to the compiled anonymous function.
  */
 static int
 lmacro_functionform (const char *name, LexState *ls, SemInfo *seminfo)
 {
-    static const char *ret_form = "return function ";
-    char buffer[BUFSIZ] = {0};
-    const char *str = NULL;
-    int i = 0;
-    int len = 0;
-    int parens = 0;
-    int ends = 1;
-    int t = ls->current;
-
 #define buff_append(str) \
+    if (i + 1 > BUFSIZ) \
+        lexerror(ls, "Macro form not allowed to overflow buffer", TK_MACRO); \
     len = strlen(str); \
     i += len; \
     strncat(buffer, str, len); \
     buffer[i] = '\0';
 
+    static const char *ret_form = "return function (";
+    char buffer[BUFSIZ] = {0};
+    const char *str;
+    int parens = 1; /* we skip past '(' that brought us into this function */
+    int ends = 1; /* macro function expects end */
+    int len = 0;
+    int i = 0;
+    int t;
+
     buff_append(ret_form);
 
-    for (;;) {
-        /* if `t' is a bonafide token instead of just a char */
-        if (t != ls->current) {
-            if (lmacro_tokenhasend(t))
-                ends++;
-            if (t == TK_END)
-                ends--;
+    while (ends > 0 || parens > 0) {
+        str = NULL;
+        t = next_llex(ls, seminfo);
 
-            /* TODO: possible to know long versus regular string by token? */
-            if (t == TK_STRING) {
-                buffer[i] = '[';
-                buffer[i+1] = '[';
-                buffer[i+2] = '\0';
-                i += 2;
-            }
+        if (t == TK_EOS)
+            lexerror(ls, "Unexpected end of input in macro form", TK_EOS);
 
-            switch (t) {
-                /* all the reserved keywords and symbols */
-                case TK_GOTO: case TK_IF: case TK_IN: case TK_LOCAL:
-                case TK_NIL: case TK_NOT: case TK_OR: case TK_REPEAT:
-                case TK_RETURN: case TK_THEN: case TK_TRUE: case TK_UNTIL:
-                case TK_WHILE: case TK_MACRO: case TK_IDIV: case TK_CONCAT:
-                case TK_DOTS: case TK_EQ: case TK_GE: case TK_LE:
-                case TK_NE: case TK_SHL: case TK_SHR: case TK_DBCOLON:
-                case TK_EOS:
-                    str = luaX_tokens[t - FIRST_RESERVED];
-                    break;
-                /* numbers, names, and strings */
-                default:
-                    str = getstr(seminfo->ts);
-                    break;
-            }
+        switch (t) {
+            case ')': str = ")"; break;
+            case '(': str = "("; break;
+            case '+': str = "+"; break;
+            case '-': str = "-"; break;
+            case '/': str = "/"; break;
+            case '*': str = "*"; break;
+            case ',': str = ","; break;
+            case '.': str = "."; break;
+            case ':': str = ":"; break;
+            case '[': str = "["; break;
+            case ']': str = "]"; break;
+            case '=': str = "="; break;
+            case '<': str = "<"; break;
+            case '>': str = ">"; break;
+            case '~': str = "~"; break;
 
-            buff_append(str);
+            /* all the reserved keywords and symbols */
+            case TK_GOTO:   case TK_IF:    case TK_IN:   case TK_LOCAL:
+            case TK_NIL:    case TK_NOT:   case TK_OR:   case TK_REPEAT:
+            case TK_RETURN: case TK_THEN:  case TK_TRUE: case TK_UNTIL:
+            case TK_WHILE:  case TK_MACRO: case TK_IDIV: case TK_CONCAT:
+            case TK_DOTS:   case TK_EQ:    case TK_GE:   case TK_LE:
+            case TK_NE:     case TK_SHL:   case TK_SHR:  case TK_DBCOLON:
+            case TK_EOS:
+                str = luaX_tokens[t - FIRST_RESERVED];
+                break;
 
-            if (t == TK_STRING) {
-                buffer[i] = ']';
-                buffer[i+1] = ']';
-                buffer[i+2] = '\0';
-                i += 2;
-            }
+            /* numbers, names, and strings */
+            default:
+                str = getstr(seminfo->ts);
+                break;
         }
-        if (str)
-            printf("%s | ", str);
-        printf("%c | parens: %d | ends: %d\n", ls->current, parens, ends);
 
-        /* regardless of having a token, we always push the current char */
-        if (ls->current == '(')
-            parens++;
-        if (ls->current == ')')
-            parens--;
+        /* 
+         * TODO: code 'quote' form will take care of string ambiguity here so
+         * that we will have a single representation for strings that should be
+         * code.
+         */
+        if (t == TK_STRING) {
+            buffer[i] = '[';
+            buffer[i+1] = '[';
+            buffer[i+2] = '\0';
+            i += 2;
+        }
+
+        buff_append(str);
+
+        if (t == TK_STRING) {
+            buffer[i] = ']';
+            buffer[i+1] = ']';
+            buffer[i+2] = '\0';
+            i += 2;
+        }
 
         buffer[i] = ls->current;
         buffer[i + 1] = '\0';
         i++;
 
-        if (parens == 0 && ends == 0) 
-            break;
-
-        if (ls->current == EOZ || t == TK_EOS)
-            lexerror(ls, "Unexpected end of input in macro form", TK_EOS);
-
-        t = next_llex(ls, seminfo);
+        if (lmacro_tokenhasend(t))
+            ends++;
+        if (t == TK_END)
+            ends--;
+        if (t == '(' || ls->current == '(')
+            parens++;
+        if (t == ')' || ls->current == ')')
+            parens--;
     }
-
-    printf("%s\n", buffer);
 
     if (luaL_loadbufferx(ls->L, buffer, i, name, "text") != 0) {
         const char *err = lua_tostring(ls->L, -1);
@@ -258,45 +264,12 @@ lmacro_define (LexState *ls, SemInfo *seminfo)
         lexerror(ls, "Expected macro name in macro form", TK_MACRO);
     name = getstr(seminfo->ts);
 
+    skipwhitespace(ls);
+
     if (ls->current != '(')
         return lmacro_simpleform(name, ls, seminfo);
-    else {
-        const char *str = NULL;
-        for (;;) {
-            str = NULL;
-            switch (t) {
-                case ')': str = ")"; break;
-                case '(': str = "("; break;
-                case '+': str = "+"; break;
-                case '/': str = "/"; break;
-                case '*': str = "*"; break;
-
-                /* all the reserved keywords and symbols */
-                case TK_GOTO: case TK_IF: case TK_IN: case TK_LOCAL:
-                case TK_NIL: case TK_NOT: case TK_OR: case TK_REPEAT:
-                case TK_RETURN: case TK_THEN: case TK_TRUE: case TK_UNTIL:
-                case TK_WHILE: case TK_MACRO: case TK_IDIV: case TK_CONCAT:
-                case TK_DOTS: case TK_EQ: case TK_GE: case TK_LE:
-                case TK_NE: case TK_SHL: case TK_SHR: case TK_DBCOLON:
-                case TK_EOS:
-                    str = luaX_tokens[t - FIRST_RESERVED];
-                    break;
-                /* numbers, names, and strings */
-                default:
-                    str = getstr(seminfo->ts);
-                    break;
-            }
-
-            printf("%s | %c\n", str, ls->current);
-
-            t = next_llex(ls, seminfo);
-
-            if (t == TK_EOS)
-                break;
-        }
-        return t;
-        //return lmacro_functionform(name, ls, seminfo);
-    }
+    else
+        return lmacro_functionform(name, ls, seminfo);
 }
 
 static int
