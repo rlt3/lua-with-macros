@@ -90,6 +90,10 @@ next (LexState *ls)
     if (!(has_replace || has_buff))
         c = zgetc(ls->z);
 
+    /* in comment? */
+    if (ls->z->l)
+        goto setchar;
+
     lmacro_lua_getmacrotable(ls->L);
     if (lmacro_ispartial(ls->L, c)) {
         size_t j = i;
@@ -125,6 +129,47 @@ next (LexState *ls)
              * value is apart of the macro string so we don't need to include
              * it.
              */
+            strncpy(buff, str, i);
+            buff[i] = '\0';
+            has_replace = 1;
+            i = 0;
+        }
+        else if (lua_isfunction(ls->L, -1)) {
+            const char *str = NULL;
+            int args = 0;
+
+            if ((c = zgetc(ls->z)) != '(')
+                lexerror(ls, "Expected '(' to start argument list", 0);
+
+            for (i = 0, c = zgetc(ls->z) ;; i++, c = zgetc(ls->z)) {
+                if (c == EOZ)
+                    lexerror(ls, "Missing ')' to close argument list", TK_EOS);
+
+                if (c == ',' || c == ')') {
+                    buff[i] = '\0';
+                    if (i > 0) {
+                        lua_pushstring(ls->L, buff);
+                        args++;
+                    }
+                    i = -1;
+                    if (c == ')')
+                        break;
+                    else
+                        continue;
+                }
+
+                buff[i] = c;
+            }
+
+            if (c != ')')
+                lexerror(ls, "Missing ')' to close argument list", 0);
+
+            if (lua_pcall(ls->L, args, 1, 0)) {
+                str = lua_tostring(ls->L, -1);
+                lexerror(ls, str, TK_MACRO);
+            }
+
+            str = lua_tolstring(ls->L, -1, &i);
             strncpy(buff, str, i);
             buff[i] = '\0';
             has_replace = 1;
@@ -551,6 +596,7 @@ static int llex (LexState *ls, SemInfo *seminfo) {
         next(ls);
         if (ls->current != '-') return '-';
         /* else is a comment */
+        ls->z->l = 1; /* next() knows we're in comment */
         next(ls);
         if (ls->current == '[') {  /* long comment? */
           int sep = skip_sep(ls);
@@ -558,12 +604,14 @@ static int llex (LexState *ls, SemInfo *seminfo) {
           if (sep >= 0) {
             read_long_string(ls, NULL, sep);  /* skip long comment */
             luaZ_resetbuffer(ls->buff);  /* previous call may dirty the buff. */
+            ls->z->l = 0;
             break;
           }
         }
         /* else short comment */
         while (!currIsNewline(ls) && ls->current != EOZ)
           next(ls);  /* skip until end of line (or end of file) */
+        ls->z->l = 0;
         break;
       }
       case '[': {  /* long string or simply '[' */
