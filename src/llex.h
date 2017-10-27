@@ -55,6 +55,18 @@ typedef struct Token {
 } Token;
 
 
+#include <stdio.h>
+#include <string.h>
+
+
+typedef struct MacroBuffer {
+    char buff[BUFSIZ];
+    int idx;
+    int has_buff;
+    int has_replace;
+} MacroBuffer;
+
+
 /* state of the lexer plus state of the parser when shared by all
    functions */
 typedef struct LexState {
@@ -71,6 +83,9 @@ typedef struct LexState {
   struct Dyndata *dyd;  /* dynamic structures used by the parser */
   TString *source;  /* current source name */
   TString *envn;  /* environment variable name */
+
+  int in_comment;
+  MacroBuffer macro; /* read-ahead buffer for parsing macro forms */
 } LexState;
 
 

@@ -65,42 +65,44 @@ static l_noret lexerror (LexState *ls, const char *msg, int token);
 static void
 next (LexState *ls)
 {
-#define buffnextchar(a) \
-    if (i + 1 >= BUFSIZ) \
+#define buffnextchar(c) \
+    if (ls->macro.idx + 1 >= BUFSIZ) \
         lexerror(ls, "Macro replacement is too long!", 0); \
-    a = buff[i++]; \
-    if (a == '\0') { \
-        has_replace = 0; \
-        has_buff = 0; \
-        i = 0; \
+    c = ls->macro.buff[ls->macro.idx++]; \
+    if (c == '\0') { \
+        ls->macro.has_replace = 0; \
+        ls->macro.has_buff = 0; \
+        ls->macro.idx = 0; \
     }
 
-    static char buff[BUFSIZ] = {'\0'};
-    static int has_buff = 0;
-    static int has_replace = 0;
-    static size_t i = 0;
+#define buffsetstr(str, len) \
+    str = lua_tolstring(ls->L, -1, &len); \
+    strncpy(ls->macro.buff, str, len); \
+    ls->macro.buff[len] = '\0'; \
+    ls->macro.has_replace = 1; \
+    ls->macro.idx = 0;
+
     char c = '\0';
 
-    if (has_replace || has_buff) {
+    if (ls->macro.has_replace || ls->macro.has_buff) {
         buffnextchar(c);
-        if (has_replace && c != '\0')
+        if (ls->macro.has_replace && c != '\0')
             goto setchar;
     }
 
-    if (!(has_replace || has_buff))
+    if (!(ls->macro.has_replace || ls->macro.has_buff))
         c = zgetc(ls->z);
 
-    /* in comment? */
-    if (ls->z->l)
+    if (ls->in_comment)
         goto setchar;
 
     lmacro_lua_getmacrotable(ls->L);
     if (lmacro_ispartial(ls->L, c)) {
-        size_t j = i;
+        size_t j = ls->macro.idx;
         do {
             /* if the buffer isn't active then append to our buffer */
-            if (!has_buff) { /* implicitly j starts at 0 */
-                buff[j] = c;
+            if (!ls->macro.has_buff) { /* implicitly j starts at 0 */
+                ls->macro.buff[j] = c;
                 /* always write EOZ to buffer because no sentinels after EOZ */
                 if (c == EOZ)
                     break;
@@ -108,12 +110,12 @@ next (LexState *ls)
             }
             /* the buffer is active, read from it. if buff ends, then append */
             else {
-                if (buff[j] != '\0') {
-                    c = buff[j];
+                if (ls->macro.buff[j] != '\0') {
+                    c = ls->macro.buff[j];
                 } else {
                     c = zgetc(ls->z);
-                    buff[j] = c;
-                    buff[j + 1] = '\0';
+                    ls->macro.buff[j] = c;
+                    ls->macro.buff[j + 1] = '\0';
                 }
                 if (c == EOZ)
                     break;
@@ -123,16 +125,13 @@ next (LexState *ls)
 
         /* we found a replacement */
         if (lua_isstring(ls->L, -1)) {
-            const char *str = lua_tolstring(ls->L, -1, &i);
             /* 
              * Replace entire buffer with macro replacement. The current c
              * value is apart of the macro string so we don't need to include
              * it.
              */
-            strncpy(buff, str, i);
-            buff[i] = '\0';
-            has_replace = 1;
-            i = 0;
+            const char *str; 
+            buffsetstr(str, j);
         }
         else if (lua_isfunction(ls->L, -1)) {
             const char *str = NULL;
@@ -141,24 +140,24 @@ next (LexState *ls)
             if ((c = zgetc(ls->z)) != '(')
                 lexerror(ls, "Expected '(' to start argument list", 0);
 
-            for (i = 0, c = zgetc(ls->z) ;; i++, c = zgetc(ls->z)) {
+            c = zgetc(ls->z);
+            for (ls->macro.idx = 0 ;; ls->macro.idx++, c = zgetc(ls->z)) {
                 if (c == EOZ)
                     lexerror(ls, "Missing ')' to close argument list", TK_EOS);
 
                 if (c == ',' || c == ')') {
-                    buff[i] = '\0';
-                    if (i > 0) {
-                        lua_pushstring(ls->L, buff);
+                    if (ls->macro.idx > 0) {
+                        ls->macro.buff[ls->macro.idx] = '\0';
+                        lua_pushstring(ls->L, ls->macro.buff);
                         args++;
+                        ls->macro.idx = -1;
                     }
-                    i = -1;
                     if (c == ')')
                         break;
-                    else
-                        continue;
+                    continue;
                 }
 
-                buff[i] = c;
+                ls->macro.buff[ls->macro.idx] = c;
             }
 
             if (c != ')')
@@ -169,25 +168,22 @@ next (LexState *ls)
                 lexerror(ls, str, TK_MACRO);
             }
 
-            str = lua_tolstring(ls->L, -1, &i);
-            strncpy(buff, str, i);
-            buff[i] = '\0';
-            has_replace = 1;
-            i = 0;
+            buffsetstr(str, j);
         }
         /* There's no replacement. */
         else {
-            if (!has_buff) {
-                buff[j] = c; /* current c is lookahead that failed ispartial */
-                buff[j + 1] = '\0';
-                has_buff = 1;
-                i = 0;
-            } else {
             /* 
-             * roll `i' back to get previous character that started the faied
-             * macro replacement sequence.
+             * In either of these statements, the idx is set to the first 
+             * character that started the failed macro replacement sequence.
              */
-                i -= 1;
+            if (!ls->macro.has_buff) {
+                /* current c is lookahead that failed ispartial */
+                ls->macro.buff[j] = c;
+                ls->macro.buff[j + 1] = '\0';
+                ls->macro.has_buff = 1;
+                ls->macro.idx = 0;
+            } else {
+                ls->macro.idx--;
             }
         }
         buffnextchar(c);
@@ -596,7 +592,7 @@ static int llex (LexState *ls, SemInfo *seminfo) {
         next(ls);
         if (ls->current != '-') return '-';
         /* else is a comment */
-        ls->z->l = 1; /* next() knows we're in comment */
+        ls->in_comment = 1;
         next(ls);
         if (ls->current == '[') {  /* long comment? */
           int sep = skip_sep(ls);
@@ -604,14 +600,14 @@ static int llex (LexState *ls, SemInfo *seminfo) {
           if (sep >= 0) {
             read_long_string(ls, NULL, sep);  /* skip long comment */
             luaZ_resetbuffer(ls->buff);  /* previous call may dirty the buff. */
-            ls->z->l = 0;
+            ls->in_comment = 0;
             break;
           }
         }
         /* else short comment */
         while (!currIsNewline(ls) && ls->current != EOZ)
           next(ls);  /* skip until end of line (or end of file) */
-        ls->z->l = 0;
+        ls->in_comment = 0;
         break;
       }
       case '[': {  /* long string or simply '[' */
