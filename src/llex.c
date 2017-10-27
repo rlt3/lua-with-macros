@@ -90,6 +90,10 @@ next (LexState *ls)
     if (!(has_replace || has_buff))
         c = zgetc(ls->z);
 
+    /* in comment? */
+    if (ls->z->l)
+        goto setchar;
+
     lmacro_lua_getmacrotable(ls->L);
     if (lmacro_ispartial(ls->L, c)) {
         size_t j = i;
@@ -143,9 +147,11 @@ next (LexState *ls)
 
                 if (c == ',' || c == ')') {
                     buff[i] = '\0';
-                    lua_pushstring(ls->L, buff);
+                    if (i > 0) {
+                        lua_pushstring(ls->L, buff);
+                        args++;
+                    }
                     i = -1;
-                    args++;
                     if (c == ')')
                         break;
                     else
@@ -590,6 +596,7 @@ static int llex (LexState *ls, SemInfo *seminfo) {
         next(ls);
         if (ls->current != '-') return '-';
         /* else is a comment */
+        ls->z->l = 1; /* next() knows we're in comment */
         next(ls);
         if (ls->current == '[') {  /* long comment? */
           int sep = skip_sep(ls);
@@ -597,12 +604,14 @@ static int llex (LexState *ls, SemInfo *seminfo) {
           if (sep >= 0) {
             read_long_string(ls, NULL, sep);  /* skip long comment */
             luaZ_resetbuffer(ls->buff);  /* previous call may dirty the buff. */
+            ls->z->l = 0;
             break;
           }
         }
         /* else short comment */
         while (!currIsNewline(ls) && ls->current != EOZ)
           next(ls);  /* skip until end of line (or end of file) */
+        ls->z->l = 0;
         break;
       }
       case '[': {  /* long string or simply '[' */
