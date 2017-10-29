@@ -68,7 +68,6 @@ lmacro_ispartial (lua_State *L, char c)
     return lua_istable(L, -1);
 }
 
-
 /* 
  * Expects macro table on top with value below. This function uses each letter
  * of the string `name' as the key to a table containing the next letter and so
@@ -86,14 +85,20 @@ lmacro_lua_setmacro (lua_State *L, const char *name)
 
     for (int i = 0; i <= len; i++) {
         key[0] = name[i];
-        if (i < len)
-            lua_newtable(L);
-        else
-            lua_pushvalue(L, val);
-        lua_setfield(L, -2, key);
+
         lua_getfield(L, -1, key);
-        /* move getfield value down and pop previous table */
-        lua_insert(L, -2);
+
+        if (lua_isnil(L, -1)) {
+            lua_pop(L, 1);
+            if (i < len)
+                lua_newtable(L);
+            else
+                lua_pushvalue(L, val);
+            lua_setfield(L, -2, key);
+            lua_getfield(L, -1, key);
+        }
+
+        lua_insert(L, -2); /* move gotten field down and pop previous table */
         lua_pop(L, 1);
     }
     lua_pop(L, 2); /* macro table and val */
