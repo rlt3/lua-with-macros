@@ -167,8 +167,8 @@ next (LexState *ls)
                         argstr[j] = '\0';
                         lua_pushstring(ls->L, argstr);
                         args++;
-                        j = -1;
                     }
+                    j = -1;
                     if (c == ')')
                         break;
                     continue;
