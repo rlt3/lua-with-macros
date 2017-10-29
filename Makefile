@@ -54,8 +54,10 @@ all:	$(PLAT)
 $(PLATS) clean:
 	cd src && $(MAKE) $@
 
-test:	dummy
-	src/lua -v
+test:
+	cc -Wall -std=gnu99 -o testbin tests/main.c src/liblua.a -lm -ldl
+	valgrind -q ./testbin
+	rm -f testbin
 
 install: dummy
 	cd src && $(MKDIR) $(INSTALL_BIN) $(INSTALL_INC) $(INSTALL_LIB) $(INSTALL_MAN) $(INSTALL_LMOD) $(INSTALL_CMOD)
