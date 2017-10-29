@@ -134,41 +134,59 @@ next (LexState *ls)
             buffsetstr(str, j);
         }
         else if (lua_isfunction(ls->L, -1)) {
-            const char *str = NULL;
+            const char *replacement = NULL;
+            char *argstr = calloc(BUFSIZ, sizeof(char));
             int args = 0;
 
-            if ((c = zgetc(ls->z)) != '(')
+            /* 
+             * The current LexState's buffer can now be dismissed for this
+             * macro's replacement to allow us to call `next' to find other
+             * macro replacements as arguments to this macro function.
+             */
+            ls->macro.idx = 0;
+            ls->macro.buff[0] = '\0';
+            ls->macro.has_buff = 0;
+
+            if (!argstr)
+                lexerror(ls, "Not enough memory for macro form", 0);
+
+            next(ls);
+            c = ls->current;
+            if (c != '(')
                 lexerror(ls, "Expected '(' to start argument list", 0);
 
-            c = zgetc(ls->z);
-            for (ls->macro.idx = 0 ;; ls->macro.idx++, c = zgetc(ls->z)) {
+            next(ls);
+            for (j = 0 ;; j++, next(ls)) {
+                c = ls->current;
+
                 if (c == EOZ)
                     lexerror(ls, "Missing ')' to close argument list", TK_EOS);
 
                 if (c == ',' || c == ')') {
-                    if (ls->macro.idx > 0) {
-                        ls->macro.buff[ls->macro.idx] = '\0';
-                        lua_pushstring(ls->L, ls->macro.buff);
+                    if (j > 0) {
+                        argstr[j] = '\0';
+                        lua_pushstring(ls->L, argstr);
                         args++;
-                        ls->macro.idx = -1;
+                        j = -1;
                     }
                     if (c == ')')
                         break;
                     continue;
                 }
 
-                ls->macro.buff[ls->macro.idx] = c;
+                argstr[j] = c;
             }
 
             if (c != ')')
                 lexerror(ls, "Missing ')' to close argument list", 0);
 
             if (lua_pcall(ls->L, args, 1, 0)) {
-                str = lua_tostring(ls->L, -1);
-                lexerror(ls, str, TK_MACRO);
+                replacement = lua_tostring(ls->L, -1);
+                lexerror(ls, replacement, TK_MACRO);
             }
 
-            buffsetstr(str, j);
+            free(argstr);
+            buffsetstr(replacement, j);
         }
         /* There's no replacement. */
         else {
