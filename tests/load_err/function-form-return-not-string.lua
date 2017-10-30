@@ -1,4 +1,7 @@
 macro foo ()
-    return 5
+    local bar = function ()
+        return "baz"
+    end
+    return bar
 end
-print(foo)
+print(foo())

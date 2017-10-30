@@ -77,6 +77,8 @@ next (LexState *ls)
 
 #define buffsetstr(str, len) \
     str = lua_tolstring(ls->L, -1, &len); \
+    if (!str) \
+        lexerror(ls, "Macro expansion must return a string", c); \
     strncpy(ls->macro.buff, str, len); \
     ls->macro.buff[len] = '\0'; \
     ls->macro.has_replace = 1; \
@@ -135,6 +137,7 @@ next (LexState *ls)
         }
         else if (lua_isfunction(ls->L, -1)) {
             const char *replacement = NULL;
+            /* in recursive next calls, if lexerror occurs, who frees this? */
             char *argstr = calloc(BUFSIZ, sizeof(char));
             int args = 0;
 
@@ -161,10 +164,8 @@ next (LexState *ls)
             for (j = 0 ;; j++, next(ls)) {
                 c = ls->current;
 
-                if (c == EOZ) {
-                    free(argstr);
-                    lexerror(ls, "Missing ')' to close argument list", TK_EOS);
-                }
+                if (c == EOZ)
+                    break;
 
                 if (c == ',' || c == ')') {
                     if (j > 0) {
@@ -192,7 +193,7 @@ next (LexState *ls)
                 lexerror(ls, replacement, c);
             }
 
-            if (!lua_isstring(ls->L, -1)) {
+            if (!lua_isstring(ls->L, -1) || lua_isnumber(ls->L, -1)) {
                 free(argstr);
                 lexerror(ls, "Macro function must return a string", c);
             }
