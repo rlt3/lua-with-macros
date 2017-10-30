@@ -18,3 +18,6 @@ macro afb [[ = ]]
 macro bfa [["great"]]
 affafbbfa
 assert(fun == "great", [[Looks for replacements in its lookup buffer.]])
+
+macro z [["foo"]]
+assert(z == "foo", [[Macros can be a single character]])
