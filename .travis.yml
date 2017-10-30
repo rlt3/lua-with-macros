@@ -1,0 +1,19 @@
+language: c
+
+branches:
+  only:
+    - master
+    - testing
+
+install:
+    - sudo apt-get update
+    - sudo apt-get install valgrind
+
+script: make clean && make linux && make test
+
+notifications:
+  recipients:
+    - leroy@bythehilt.com
+  email:
+    on_success: change
+    on_failure: always
