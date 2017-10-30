@@ -152,15 +152,19 @@ next (LexState *ls)
 
             next(ls);
             c = ls->current;
-            if (c != '(')
-                lexerror(ls, "Expected '(' to start argument list", 0);
+            if (c != '(') {
+                free(argstr);
+                lexerror(ls, "Expected '(' to start argument list", c);
+            }
 
             next(ls);
             for (j = 0 ;; j++, next(ls)) {
                 c = ls->current;
 
-                if (c == EOZ)
+                if (c == EOZ) {
+                    free(argstr);
                     lexerror(ls, "Missing ')' to close argument list", TK_EOS);
+                }
 
                 if (c == ',' || c == ')') {
                     if (j > 0) {
@@ -177,12 +181,20 @@ next (LexState *ls)
                 argstr[j] = c;
             }
 
-            if (c != ')')
-                lexerror(ls, "Missing ')' to close argument list", 0);
+            if (c != ')') {
+                free(argstr);
+                lexerror(ls, "Missing ')' to close argument list", c);
+            }
 
             if (lua_pcall(ls->L, args, 1, 0)) {
+                free(argstr);
                 replacement = lua_tostring(ls->L, -1);
-                lexerror(ls, replacement, TK_MACRO);
+                lexerror(ls, replacement, c);
+            }
+
+            if (!lua_isstring(ls->L, -1)) {
+                free(argstr);
+                lexerror(ls, "Macro function must return a string", c);
             }
 
             free(argstr);
