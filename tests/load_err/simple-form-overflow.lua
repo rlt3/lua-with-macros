@@ -1,0 +1,6 @@
+macro f [[eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee]]
+macro g [[fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff]]
+macro h [[ggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg]]
+macro i [[hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh]]
+macro j [[iiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiii]]
+print("j")

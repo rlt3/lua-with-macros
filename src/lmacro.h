@@ -63,7 +63,7 @@ enum MacroMatch {
     MATCH_SUCCESS_RDR,
 };
 
-static enum MacroMatch
+static int
 lmacro_match (lua_State *L, char c)
 {
     static char key[2] = {'\0'};
@@ -94,6 +94,8 @@ lmacro_setmacrobuff (LexState *ls)
     const char *str = lua_tolstring(ls->L, -1, &len);
     if (!str)
         lexerror(ls, "Macro expansion must return a string", ls->current);
+    if (len >= BUFSIZ)
+        lexerror(ls, "Macro expansion overflows buffer", ls->current);
     strncpy(ls->macro.buff, str, len);
     ls->macro.buff[len] = '\0';
     ls->macro.has_replace = 1;
@@ -107,7 +109,7 @@ static inline char
 lmacro_next (LexState *ls)
 {
     if (ls->macro.idx + 1 >= BUFSIZ)
-        lexerror(ls, "Macro replacement is too long!", 0);
+        lexerror(ls, "Macro expansion overflows buffer", 0);
     char c = ls->macro.buff[ls->macro.idx++];
     if (c == '\0') {
         ls->macro.has_replace = 0;
@@ -239,6 +241,7 @@ lmacro_matchpartial (LexState *ls, char c)
     }
 
     switch (match) {
+        /* current c must be part of macro form, simple or function */
         case MATCH_SUCCESS_FUN:
             c = lmacro_replacefunction(ls);
             break;
