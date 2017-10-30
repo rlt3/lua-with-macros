@@ -55,17 +55,273 @@ lmacro_lua_getmacrotable (lua_State *L)
  * returns 1, else 0. This function removes the table from the top of the stack
  * and replaces it with whatever is pushed from looking up the key.
  */
-static int
-lmacro_ispartial (lua_State *L, char c)
+enum MacroMatch {
+    MATCH_FAIL = 0,
+    MATCH_PARTIAL,
+    MATCH_SUCCESS_FUN,
+    MATCH_SUCCESS_SMP,
+    MATCH_SUCCESS_RDR,
+};
+
+static enum MacroMatch
+lmacro_match (lua_State *L, char c)
 {
     static char key[2] = {'\0'};
+    int ret = MATCH_FAIL;
     if (c == EOZ)
-        return 0;
+        goto exit;
     key[0] = c;
     lua_getfield(L, -1, key);
     lua_insert(L, -2);
     lua_pop(L, 1);
-    return lua_istable(L, -1);
+    if (lua_isstring(L, -1))
+        ret = MATCH_SUCCESS_SMP;
+    if (lua_isfunction(L, -1))
+        ret = MATCH_SUCCESS_FUN;
+    if (lua_istable(L, -1))
+        ret = MATCH_PARTIAL;
+exit:
+    return ret;
+}
+
+/*
+ * Takes the string on top of the stack and places it in the macro buffer.
+ */
+static inline void
+lmacro_setmacrobuff (LexState *ls)
+{
+    size_t len;
+    const char *str = lua_tolstring(ls->L, -1, &len);
+    if (!str)
+        lexerror(ls, "Macro expansion must return a string", ls->current);
+    strncpy(ls->macro.buff, str, len);
+    ls->macro.buff[len] = '\0';
+    ls->macro.has_replace = 1;
+    ls->macro.idx = 0;
+}
+
+/*
+ * Get the next character from the macro buffer.
+ */
+static inline char
+lmacro_next (LexState *ls)
+{
+    if (ls->macro.idx + 1 >= BUFSIZ)
+        lexerror(ls, "Macro replacement is too long!", 0);
+    char c = ls->macro.buff[ls->macro.idx++];
+    if (c == '\0') {
+        ls->macro.has_replace = 0;
+        ls->macro.has_buff = 0;
+        ls->macro.idx = 0;
+    }
+    return c;
+}
+
+/* 
+ * Place the string on top of the stack onto the macro buffer.
+ */
+static char
+lmacro_replacesimple (LexState *ls)
+{
+    lmacro_setmacrobuff(ls);
+    return lmacro_next(ls);
+}
+
+/* 
+ * Get the string that replaces a macro string from a function on top of the
+ * stack and place that string into the macro buffer.
+ */
+static char
+lmacro_replacefunction (LexState *ls)
+{
+    const char *replacement = NULL;
+    /* in recursive next calls, if lexerror occurs, who frees this? */
+    char *argstr = calloc(BUFSIZ, sizeof(char));
+    int i, args = 0;
+    char c;
+
+    /* 
+     * The current LexState's buffer can now be dismissed for this
+     * macro's replacement to allow us to call `next' to find other
+     * macro replacements as arguments to this macro function.
+     */
+    ls->macro.idx = 0;
+    ls->macro.buff[0] = '\0';
+    ls->macro.has_buff = 0;
+
+    if (!argstr)
+        lexerror(ls, "Not enough memory for macro form", 0);
+
+    next(ls);
+    c = ls->current;
+    if (c != '(') {
+        free(argstr);
+        lexerror(ls, "Expected '(' to start argument list", c);
+    }
+
+    next(ls);
+    for (i = 0 ;; i++, next(ls)) {
+        c = ls->current;
+
+        if (c == EOZ)
+            break;
+
+        if (c == ',' || c == ')') {
+            if (i > 0) {
+                argstr[i] = '\0';
+                lua_pushstring(ls->L, argstr);
+                args++;
+            }
+            i = -1;
+            if (c == ')')
+                break;
+            continue;
+        }
+
+        argstr[i] = c;
+    }
+
+    if (c != ')') {
+        free(argstr);
+        lexerror(ls, "Missing ')' to close argument list", c);
+    }
+
+    if (lua_pcall(ls->L, args, 1, 0)) {
+        free(argstr);
+        replacement = lua_tostring(ls->L, -1);
+        lexerror(ls, replacement, c);
+    }
+
+    if (!lua_isstring(ls->L, -1) || lua_isnumber(ls->L, -1)) {
+        free(argstr);
+        lexerror(ls, "Macro function must return a string", c);
+    }
+
+    free(argstr);
+    lmacro_setmacrobuff(ls);
+    return lmacro_next(ls);
+}
+
+/*
+ * Read ahead as many characters as it takes to fail or succeed a match. Saves
+ * read characters into the LexState's macro buffer. If read characters form
+ * a macro, the macro buffer becomes the replacement.
+ */
+static char
+lmacro_matchpartial (LexState *ls, char c)
+{
+    int match = MATCH_PARTIAL;
+    int i = ls->macro.idx;
+
+    while (match == MATCH_PARTIAL) {
+        /* if the buffer isn't active then append to our buffer */
+        if (!ls->macro.has_buff) { /* implicitly i starts at 0 */
+            ls->macro.buff[i] = c;
+            /* always write EOZ to buffer because no sentinels after EOZ */
+            if (c == EOZ)
+                break;
+            c = zgetc(ls->z);
+        }
+        /* the buffer is active, read from it. if buff ends, then append */
+        else {
+            if (ls->macro.buff[i] != '\0') {
+                c = ls->macro.buff[i];
+            } else {
+                c = zgetc(ls->z);
+                ls->macro.buff[i] = c;
+                ls->macro.buff[i + 1] = '\0';
+            }
+            if (c == EOZ)
+                break;
+        }
+        i++;
+        match = lmacro_match(ls->L, c);
+    }
+
+    switch (match) {
+        case MATCH_SUCCESS_FUN:
+            c = lmacro_replacefunction(ls);
+            break;
+
+        case MATCH_SUCCESS_SMP:
+            c = lmacro_replacesimple(ls);
+            break;
+
+        case MATCH_FAIL:
+        default:
+        {
+            /* 
+             * In either of these statements, the idx is set to the first 
+             * character that started the failed macro replacement sequence.
+             */
+            if (!ls->macro.has_buff) {
+                /* current c is lookahead that failed lmacro_match */
+                ls->macro.buff[i] = c;
+                ls->macro.buff[i + 1] = '\0';
+                ls->macro.has_buff = 1;
+                ls->macro.idx = 0;
+            } else {
+                ls->macro.idx--;
+            }
+            c = lmacro_next(ls);
+            break;
+        }
+    }
+    return c;
+}
+
+/*
+ * Sets ls->current to the next character from the input buffer.
+ * If a char read is a partial match to a macro string then read ahead more
+ * characters into a temp buffer.
+ * If those characters match a macro, then the buffer is set to the replacement
+ * and the tmp buffer is read until the nil char \0.
+ * If the read ahead characters don't match a replacement then those characters
+ * are read from the tmp buffer one at a time and are then tested again to see
+ * if they are apart of a macro string.
+ */
+static void
+next (LexState *ls)
+{
+    char c = '\0';
+
+    if (ls->macro.has_replace || ls->macro.has_buff) {
+        c = lmacro_next(ls);
+        if (ls->macro.has_replace && c != '\0')
+            goto setchar;
+    }
+
+    if (!(ls->macro.has_replace || ls->macro.has_buff))
+        c = zgetc(ls->z);
+
+    if (ls->in_comment)
+        goto setchar;
+
+    lmacro_lua_getmacrotable(ls->L);
+
+    switch (lmacro_match(ls->L, c)) {
+        case MATCH_SUCCESS_FUN:
+            c = lmacro_replacefunction(ls);
+            break;
+
+        case MATCH_SUCCESS_SMP:
+            c = lmacro_replacesimple(ls);
+            break;
+
+        case MATCH_PARTIAL:
+            c = lmacro_matchpartial(ls, c);
+            break;
+
+        case MATCH_FAIL:
+        default:
+            break;
+    }
+
+    lua_pop(ls->L, 1);
+
+setchar:
+    ls->current = c;
+    return;
 }
 
 /* 
