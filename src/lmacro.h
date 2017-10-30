@@ -150,11 +150,13 @@ lmacro_functionform (const char *name, LexState *ls, SemInfo *seminfo)
     len = strlen(str); \
     i += len; \
     strncat(buffer, str, len); \
-    buffer[i] = '\0';
+    buffer[i] = '\0'; \
+    str = NULL;
 
-    static const char *ret_form = "return function (";
+    /* Can't be static for some reason. Search for COMPILER */
+    const char *ret_form = "return function (";
+    const char *str = NULL;
     char buffer[BUFSIZ] = {0};
-    const char *str;
     int parens = 1; /* we skip past '(' that brought us into this function */
     int ends = 1; /* macro function expects end */
     int len = 0;
@@ -198,7 +200,18 @@ lmacro_functionform (const char *name, LexState *ls, SemInfo *seminfo)
                 str = luaX_tokens[t - FIRST_RESERVED];
                 break;
 
-            /* numbers, names, and strings */
+            case TK_INT:
+                i += snprintf(buffer+i, BUFSIZ-i, "%d", (int)seminfo->i);
+                buffer[i] = '\0';
+                break;
+
+            case TK_FLT:
+                i += snprintf(buffer+i, BUFSIZ-i, "%f", (float)seminfo->r);
+                buffer[i] = '\0';
+                break;
+
+            case TK_NAME:
+            case TK_STRING:
             default:
                 str = getstr(seminfo->ts);
                 break;
@@ -216,7 +229,17 @@ lmacro_functionform (const char *name, LexState *ls, SemInfo *seminfo)
             i += 2;
         }
 
-        buff_append(str);
+        /* TODO: COMPILER
+         * I think there's a weird compiler error with gcc 4.9.2. If I
+         * take out the brackets after the if statement then the program will
+         * segfault when parsing macro functions with numbers. Stepping through
+         * gdb shows no if statement and directly doing buff_append on a NULL
+         * string. Same with the following if clause:
+         *  if (!(t == TK_INT || t == TK_FLT)) { }
+         */
+        if (str != NULL) {
+            buff_append(str);
+        }
 
         if (t == TK_STRING) {
             buffer[i] = ']';
