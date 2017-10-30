@@ -18,7 +18,7 @@ cleanup ()
 void
 new_env ()
 {
-    cleanup(L);
+    cleanup();
     L = luaL_newstate();
     if (!L) {
         fprintf(stderr, "No memory for new Lua env");
