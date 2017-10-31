@@ -15,29 +15,6 @@ static int skip_sep (LexState *ls);
 extern int luaL_loadbufferx (lua_State *, const char *, size_t,
                              const char *, const char *);
 
-#define skipwhitespace(ls) \
-    while (lisspace(ls->current)) { \
-        if (currIsNewline(ls)) \
-            inclinenumber(ls); \
-        next(ls); \
-    }
-
-/* Sometimes you don't want meta-recursion . . . */
-static inline int
-next_llex (LexState *ls, SemInfo *seminfo)
-{
-    next(ls);
-    return llex(ls, seminfo);
-}
-
-/* . . . and sometimes you do */
-static inline int
-next_lmacro (LexState *ls, SemInfo *seminfo)
-{
-    next(ls);
-    return lmacro_llex(ls, seminfo);
-}
-
 /* Push the macro table onto the stack, creating it if it doesn't exist */
 static inline void
 lmacro_lua_getmacrotable (lua_State *L)
@@ -75,12 +52,12 @@ lmacro_match (lua_State *L, char c)
     lua_getfield(L, -1, key);
     lua_insert(L, -2);
     lua_pop(L, 1);
-    if (lua_isstring(L, -1))
-        ret = MATCH_SUCCESS_SMP;
-    if (lua_isfunction(L, -1))
-        ret = MATCH_SUCCESS_FUN;
     if (lua_istable(L, -1))
         ret = MATCH_PARTIAL;
+    else if (lua_isstring(L, -1))
+        ret = MATCH_SUCCESS_SMP;
+    else if (lua_isfunction(L, -1))
+        ret = MATCH_SUCCESS_FUN;
 exit:
     return ret;
 }
@@ -138,7 +115,7 @@ static char
 lmacro_replacefunction (LexState *ls)
 {
     const char *replacement = NULL;
-    /* in recursive next calls, if lexerror occurs, who frees this? */
+    /* TODO: in recursive next calls, if lexerror occurs, who frees this? */
     char *argstr = calloc(BUFSIZ, sizeof(char));
     int i, args = 0;
     char c;
@@ -287,7 +264,7 @@ lmacro_matchpartial (LexState *ls, char c)
 static void
 next (LexState *ls)
 {
-    char c = '\0';
+    char c = EOZ;
 
     if (ls->macro.has_replace || ls->macro.has_buff) {
         c = lmacro_next(ls);
@@ -383,14 +360,18 @@ lmacro_simpleform (const char *name, LexState *ls, SemInfo *seminfo)
     const char *def = NULL;
 
     if (llex(ls, seminfo) != TK_STRING)
-        lexerror(ls, "Expected macro definition after name", TK_NAME);
+        lexerror(ls, "Expected macro definition after name", TK_MACRO);
     def = getstr(seminfo->ts);
 
     lua_pushstring(ls->L, def);
     lmacro_lua_getmacrotable(ls->L);
     lmacro_lua_setmacro(ls->L, name);
 
-    return next_lmacro(ls, seminfo);
+    if (!(currIsNewline(ls) || ls->current == ';'))
+        lexerror(ls, "Expected end of macro definition", TK_MACRO);
+
+    /* start lexing at the normal level again */
+    return lmacro_llex(ls, seminfo);
 }
 
 /*
@@ -427,10 +408,15 @@ lmacro_functionform (const char *name, LexState *ls, SemInfo *seminfo)
 
     while (ends > 0 || parens > 0) {
         str = NULL;
-        t = next_llex(ls, seminfo);
+
+        if (currIsNewline(ls))
+            inclinenumber(ls); /* this calls `next` a bunch */
+        else
+            next(ls);
+        t = llex(ls, seminfo);
 
         if (t == TK_EOS)
-            lexerror(ls, "Unexpected end of input in macro form", TK_EOS);
+            lexerror(ls, "Unexpected end of input in macro form", TK_MACRO);
 
         switch (t) {
             case ')': str = ")"; break;
@@ -522,6 +508,9 @@ lmacro_functionform (const char *name, LexState *ls, SemInfo *seminfo)
             parens--;
     }
 
+    if (!(currIsNewline(ls) || ls->current == ';'))
+        lexerror(ls, "Expected end of macro definition", TK_MACRO);
+
     if (luaL_loadbufferx(ls->L, buffer, i, name, "text") != 0) {
         const char *err = lua_tostring(ls->L, -1);
         lexerror(ls, err, TK_MACRO);
@@ -534,7 +523,7 @@ lmacro_functionform (const char *name, LexState *ls, SemInfo *seminfo)
 
     lmacro_lua_getmacrotable(ls->L);
     lmacro_lua_setmacro(ls->L, name);
-    return next_lmacro(ls, seminfo);
+    return lmacro_llex(ls, seminfo);
 }
 
 /*
@@ -555,26 +544,31 @@ lmacro_define (LexState *ls, SemInfo *seminfo)
 
     if (ls->current != ' ')
         lexerror(ls, "Expected macro name", TK_MACRO);
-    next(ls);
-    while (ls->current != ' ') {
+
+    for (next(ls); !lisspace(ls->current); next(ls)) {
         if (ls->current == '[' || ls->current == ']') {
             int t = ls->current;
             int s = skip_sep(ls);
             luaZ_resetbuffer(ls->buff);
+            if (ls->current == EOZ)
+                lexerror(ls, "Unexpected end of file during macro name", TK_MACRO);
+            if (lisspace(ls->current))
+                break;
             if (s >= 0)
                 lexerror(ls, "Macro name has long-string brackets", TK_MACRO);
             else
                 nameaddchar(t);
         }
-
         if (ls->current == EOZ)
             lexerror(ls, "Unexpected end of file during macro name", TK_MACRO);
-
         nameaddchar(ls->current);
-        next(ls);
     }
 
-    skipwhitespace(ls);
+    while (lisspace(ls->current)) {
+        if (currIsNewline(ls))
+            inclinenumber(ls);
+        next(ls);
+    }
 
     if (ls->current != '(')
         return lmacro_simpleform(name, ls, seminfo);
