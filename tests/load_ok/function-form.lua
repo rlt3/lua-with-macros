@@ -63,3 +63,15 @@ macro sideeffect (c)
 end
 assert("foo" == "sideeffect(foo)" and globalvar == "foo",
        [[Macro functions have access to the global state.]])
+
+
+macro z (c)
+    return put(c)
+end
+assert("foo" == "z(foo)", [[Macro functions can be a single character.]])
+
+
+macro => ()
+    return [["foobar"]]
+end
+assert(=>() == "foobar", [[Macro function names can be symbols.]])

@@ -11,6 +11,7 @@ static int lmacro_llex (LexState *ls, SemInfo *seminfo);
 static void next (LexState *ls);
 static void inclinenumber (LexState *ls);
 static void esccheck (LexState *ls, int c, const char *msg);
+static int skip_sep (LexState *ls);
 extern int luaL_loadbufferx (lua_State *, const char *, size_t,
                              const char *, const char *);
 
@@ -544,12 +545,34 @@ lmacro_functionform (const char *name, LexState *ls, SemInfo *seminfo)
 static int
 lmacro_define (LexState *ls, SemInfo *seminfo)
 {
-    const char *name = NULL;
-    int t = next_llex(ls, seminfo);
+    char name[BUFSIZ] = {'\0'};
+    int i = 0;
 
-    if (t != TK_NAME)
-        lexerror(ls, "Expected macro name in macro form", TK_MACRO);
-    name = getstr(seminfo->ts);
+#define nameaddchar(c) \
+    if (i + 1 >= BUFSIZ) \
+        lexerror(ls, "Macro name overflows buffer", TK_MACRO); \
+    name[i++] = c;
+
+    if (ls->current != ' ')
+        lexerror(ls, "Expected macro name", TK_MACRO);
+    next(ls);
+    while (ls->current != ' ') {
+        if (ls->current == '[' || ls->current == ']') {
+            int t = ls->current;
+            int s = skip_sep(ls);
+            luaZ_resetbuffer(ls->buff);
+            if (s >= 0)
+                lexerror(ls, "Macro name has long-string brackets", TK_MACRO);
+            else
+                nameaddchar(t);
+        }
+
+        if (ls->current == EOZ)
+            lexerror(ls, "Unexpected end of file during macro name", TK_MACRO);
+
+        nameaddchar(ls->current);
+        next(ls);
+    }
 
     skipwhitespace(ls);
 
