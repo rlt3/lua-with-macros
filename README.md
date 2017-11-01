@@ -6,6 +6,25 @@ macros. Coming soon are cool reader macros.
 Also coming soon is a way to represent strings-as-code in a different
 way than actual strings not unlike `backqoute` and `quote` in Common Lisp.
 
+## Quick Rundown
+
+Macros are simply strings of code that get spliced into the lexer in realtime
+as Lua is being parsed. That means, right now, the simple macros and function
+macros must be and return strings respectively.
+
+Because macro replacements *are* Lua strings that means the only restriction of
+what you can name your macro are the long-string designators `[=*[` and `]=*]`
+(which means of n-`=` signs). This means macros named `++++++` or `local` or
+`=` are all valid but that macros named `str[===[` or `eos]===]` or `foo[[` are
+not valid.
+
+Macro functions have access to the global environment because macro functions
+are regular Lua functions executed in the same environment but just on a 
+different level.
+
+Macro functions can have macros used inside them. They can also have macros
+defined inside them but there is no scoping of macros right now.
+
 ## Simple Code Replacement Form
 
 This macro form is simple code replacement. Its form is `macro <name> <string>`
@@ -33,8 +52,9 @@ Which again yields `bar` to the terminal.
 The function macro form is `macro <name> ([<arg>|,]+) [<expression>]+ end`. The
 `<name>` is simply the name of the function macro that is inevitably replaced
 by the return value of the function. `<arg>`s can contain anything except
-commas (`,`) right now (if you want it to work right).  Here's an example of a
-function macro to keep from typing inserts:
+commas (`,`) right now (if you want it to work right). The function also needs
+to return a valid Lua string.  Here's an example of a function macro to keep
+from typing inserts:
 
     macro insert (t, v)
         -- t[#t+1] = v
@@ -119,10 +139,4 @@ considered failing.
 If you can think of any tricky condition that would really put the system to
 the test I would really appreciate a pull request or an email.
 
-## Issues
-
-This simple macro system has not been tested extensively and needs some sort of
-fuzzer so the system can be more robust against incorrect forms.
-
-Line numbers also aren't working correctly so error reporting is a tad
-confusing right now.
+This simple macro system has not been tested extensively against incorrect forms and needs some sort of fuzzer so the system can be more robust.

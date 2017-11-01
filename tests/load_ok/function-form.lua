@@ -75,3 +75,20 @@ macro => ()
     return [["foobar"]]
 end
 assert(=>() == "foobar", [[Macro function names can be symbols.]])
+
+
+macro
++++++
+(a)
+return string.format("%s = %s + 5", a, a)
+end
+local i = 0
++++++(i)
+assert(i == 5, [[Macro function can be defined on multiple lines.]])
+
+
+macro u-level ()
+    macro foo [[bar]]
+    return [[bar]]
+end
+assert("u-level()" == "foo", [[Macros defined in macros are not scoped.]])

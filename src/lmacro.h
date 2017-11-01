@@ -139,8 +139,22 @@ lmacro_replacefunction (LexState *ls)
         lexerror(ls, "Expected '(' to start argument list", c);
     }
 
-    next(ls);
-    for (i = 0 ;; i++, next(ls)) {
+    int is_newline = 0;
+    for (i = 0 ;; i++) {
+        /* 
+         * newline is a valid character that needs to be pushed as argument.
+         * inclinenumber calls next, so we need to let the newline be written
+         * to argstr before incrementing the line number.
+         */
+        if (is_newline) {
+            inclinenumber(ls);
+            is_newline = 0;
+        } else {
+            next(ls);
+            if (currIsNewline(ls))
+                is_newline = 1;
+        }
+
         c = ls->current;
 
         if (c == EOZ)
@@ -530,6 +544,9 @@ lmacro_functionform (const char *name, LexState *ls, SemInfo *seminfo)
  * Parse a macro form.
  * Simple macro: macro <name> <string>
  * Function macro: macro <name> ([args|,]+) [<expr>]+ end
+ *
+ * <name> is any characters in any order except [=*[ and ]=*] both prepended
+ * and postpended with a whitespace or newline character.
  */
 static int
 lmacro_define (LexState *ls, SemInfo *seminfo)
@@ -540,40 +557,54 @@ lmacro_define (LexState *ls, SemInfo *seminfo)
 #define nameaddchar(c) \
     if (i + 1 >= BUFSIZ) \
         lexerror(ls, "Macro name overflows buffer", TK_MACRO); \
-    name[i++] = c;
+    name[i++] = c; \
+    name[i] = '\0';
 
-    if (ls->current != ' ')
-        lexerror(ls, "Expected macro name", TK_MACRO);
+    /* We allow linebreaks after macro token */
+    if (!(lisspace(ls->current) || currIsNewline(ls)))
+        lexerror(ls, "Expected macro name", ls->current);
 
-    for (next(ls); !lisspace(ls->current); next(ls)) {
-        if (ls->current == '[' || ls->current == ']') {
-            int t = ls->current;
-            int s = skip_sep(ls);
-            luaZ_resetbuffer(ls->buff);
-            if (ls->current == EOZ)
-                lexerror(ls, "Unexpected end of file during macro name", TK_MACRO);
-            if (lisspace(ls->current))
-                break;
-            if (s >= 0)
-                lexerror(ls, "Macro name has long-string brackets", TK_MACRO);
-            else
-                nameaddchar(t);
-        }
+    if (currIsNewline(ls))
+        inclinenumber(ls); /* calls next internally */
+    else
+        next(ls);
+
+    while (!(lisspace(ls->current) || currIsNewline(ls))) {
         if (ls->current == EOZ)
             lexerror(ls, "Unexpected end of file during macro name", TK_MACRO);
-        nameaddchar(ls->current);
-    }
 
-    while (lisspace(ls->current)) {
-        if (currIsNewline(ls))
-            inclinenumber(ls);
+        if (ls->current == '[' || ls->current == ']') {
+            int t = ls->current;
+            int s = skip_sep(ls); /* calls next */
+            luaZ_resetbuffer(ls->buff);
+            if (s >= 0)
+                lexerror(ls, "Macro name has long-string brackets", TK_MACRO);
+            nameaddchar(t); /* t is vetted against checks but not ls->current */
+            continue;
+        }
+
+        nameaddchar(ls->current);
         next(ls);
     }
 
-    if (ls->current != '(')
-        return lmacro_simpleform(name, ls, seminfo);
-    else
+    /* We allow linebreaks after macro's name */
+    if (!(lisspace(ls->current) || currIsNewline(ls)))
+        lexerror(ls, "Expected macro name", ls->current);
+
+    while (lisspace(ls->current) || currIsNewline(ls)) {
+        if (currIsNewline(ls))
+            inclinenumber(ls); /* calls next internally */
+        else
+            next(ls);
+    }
+
+    if (ls->current == EOZ)
+        lexerror(ls, "Unexpected end of file during macro name", TK_MACRO);
+
+    if (ls->current == '(')
         return lmacro_functionform(name, ls, seminfo);
+    else
+        return lmacro_simpleform(name, ls, seminfo);
 }
 
 static int
