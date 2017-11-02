@@ -1631,8 +1631,9 @@ LClosure *luaY_parser (lua_State *L, ZIO *z, Mbuffer *buff,
   setclLvalue(L, L->top, cl);  /* anchor it (to avoid being collected) */
   luaD_inctop(L);
   lexstate.h = luaH_new(L);  /* create table for scanner */
-  lexstate.in_comment = 0;
   memset(lexstate.macro.buff, '\0', BUFSIZ);
+  lexstate.macro.in_comment = 0;
+  lexstate.macro.in_reader = 0;
   lexstate.macro.idx = 0;
   lexstate.macro.has_buff = 0;
   lexstate.macro.has_replace = 0;

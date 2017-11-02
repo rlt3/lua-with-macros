@@ -449,7 +449,7 @@ static int llex (LexState *ls, SemInfo *seminfo) {
         next(ls);
         if (ls->current != '-') return '-';
         /* else is a comment */
-        ls->in_comment = 1;
+        ls->macro.in_comment = 1;
         next(ls);
         if (ls->current == '[') {  /* long comment? */
           int sep = skip_sep(ls);
@@ -457,14 +457,14 @@ static int llex (LexState *ls, SemInfo *seminfo) {
           if (sep >= 0) {
             read_long_string(ls, NULL, sep);  /* skip long comment */
             luaZ_resetbuffer(ls->buff);  /* previous call may dirty the buff. */
-            ls->in_comment = 0;
+            ls->macro.in_comment = 0;
             break;
           }
         }
         /* else short comment */
         while (!currIsNewline(ls) && ls->current != EOZ)
           next(ls);  /* skip until end of line (or end of file) */
-        ls->in_comment = 0;
+        ls->macro.in_comment = 0;
         break;
       }
       case '[': {  /* long string or simply '[' */

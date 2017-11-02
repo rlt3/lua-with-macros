@@ -64,6 +64,8 @@ typedef struct MacroBuffer {
     int idx;
     int has_buff;
     int has_replace;
+    int in_comment;
+    int in_reader;
 } MacroBuffer;
 
 
@@ -84,7 +86,6 @@ typedef struct LexState {
   TString *source;  /* current source name */
   TString *envn;  /* environment variable name */
 
-  int in_comment;
   MacroBuffer macro; /* read-ahead buffer for parsing macro forms */
 } LexState;
 

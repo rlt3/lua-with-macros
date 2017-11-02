@@ -7,42 +7,65 @@
 #define MACROTABLE  "__macro"
 #define READERTABLE "__reader"
 
+#define skipwhitespace(ls) \
+    while (lisspace(ls->current) || currIsNewline(ls)) { \
+        if (currIsNewline(ls)) \
+            inclinenumber(ls); /* calls next internally */ \
+        else \
+            next(ls); \
+    }
+
 static int llex (LexState *ls, SemInfo *seminfo);
 static int lmacro_llex (LexState *ls, SemInfo *seminfo);
 static void next (LexState *ls);
 static void inclinenumber (LexState *ls);
-static void esccheck (LexState *ls, int c, const char *msg);
 static int skip_sep (LexState *ls);
 extern int luaL_loadbufferx (lua_State *, const char *, size_t,
                              const char *, const char *);
+extern int luaL_ref(lua_State *L, const int);
+
+static inline void
+lmacro_lua_getglobaltable (lua_State *L, const char *name)
+{
+    lua_getglobal(L, name);
+    if (lua_isnil(L, -1)) {
+        lua_pop(L, 1);
+        lua_newtable(L);
+        lua_setglobal(L, name);
+        lua_getglobal(L, name);
+    }
+}
 
 /* Push the macro table onto the stack, creating it if it doesn't exist */
 static inline void
 lmacro_lua_getmacrotable (lua_State *L)
 {
-    lua_getglobal(L, MACROTABLE);
-    if (lua_isnil(L, -1)) {
-        lua_pop(L, 1);
-        lua_newtable(L);
-        lua_setglobal(L, MACROTABLE);
-        lua_getglobal(L, MACROTABLE);
-    }
+    lmacro_lua_getglobaltable(L, MACROTABLE);
 }
 
-/* Set reader's name as key in reader table to `true`. Balances stack. */
+/* Set function ref on top of stack as key in reader. Balances stack. */
 static inline void
-lmacro_lua_setreader (lua_State *L, const char *reader)
+lmacro_lua_setreader (lua_State *L)
 {
-    lua_getglobal(L, READERTABLE);
-    if (lua_isnil(L, -1)) {
-        lua_pop(L, 1);
-        lua_newtable(L);
-        lua_setglobal(L, READERTABLE);
-        lua_getglobal(L, MACROTABLE);
-    }
+    lmacro_lua_getglobaltable(L, READERTABLE);
+    lua_insert(L, -2); /* move function on top */
     lua_pushboolean(L, 1);
-    lua_setfield(L, -2, reader);
+    lua_settable(L, -3);
     lua_pop(L, 1);
+}
+
+/* Returns true if func reference `r' is in reader table */
+static int
+lmacro_lua_isreader (lua_State *L, const int r)
+{
+    int reader = 0;
+    lmacro_lua_getglobaltable(L, READERTABLE);
+    lua_pushinteger(L, r);
+    lua_gettable(L, -2);
+    if (lua_isboolean(L, -1))
+        reader = 1;
+    lua_pop(L, 2); /* table value and table */
+    return reader;
 }
 
 /* 
@@ -71,10 +94,10 @@ lmacro_match (lua_State *L, char c)
     lua_pop(L, 1);
     if (lua_istable(L, -1))
         ret = MATCH_PARTIAL;
-    else if (lua_isstring(L, -1))
-        ret = MATCH_SUCCESS_SMP;
-    else if (lua_isfunction(L, -1))
+    else if (lua_isinteger(L, -1)) /* must be tested first */
         ret = MATCH_SUCCESS_FUN;
+    else if (lua_isstring(L, -1))  /* true if val is convertable to string */
+        ret = MATCH_SUCCESS_SMP;
 exit:
     return ret;
 }
@@ -124,18 +147,89 @@ lmacro_replacesimple (LexState *ls)
     return lmacro_next(ls);
 }
 
+/*
+ * Next function skips the overridden `next` function declared in this file.
+ * This lets the reader macro read the raw source before macro transformations
+ * have occured.
+ */
+static int
+lmacro_luafunction_next (lua_State *L)
+{
+    int do_collect = 0;
+    LexState *ls = lua_touserdata(L, lua_upvalueindex(1));
+    if (!ls) {
+        lua_pushstring(L, "Lua's lexical state doesn't exist");
+        lua_error(L);
+    }
+    if (lua_isboolean(L, -1)) {
+        do_collect = lua_toboolean(L, -1);
+        lua_pop(L, 1);
+    }
+    /* if passing 'true' into function, collect chars by whitespace */
+    if (do_collect) {
+        char buff[BUFSIZ] = {'\0'};
+        int i = 0;
+        skipwhitespace(ls);
+        while (!(lisspace(ls->current) || currIsNewline(ls))) {
+            if (ls->current == EOZ) {
+                lua_pushstring(L, "Unexpected end of file in reader macro");
+                lua_error(L);
+            }
+            if (i + 1 >= BUFSIZ) {
+                lua_pushstring(L, "Reader macro will overflow buffer");
+                lua_error(L);
+            }
+            buff[i++] = ls->current;
+            next(ls);
+        }
+        lua_pushstring(ls->L, buff);
+    } else {
+        next(ls);
+        if (ls->current == EOZ) {
+            lua_pushstring(L, "Unexpected end of file in reader macro");
+            lua_error(L);
+        }
+        lua_pushfstring(ls->L, "%c", ls->current);
+    }
+    return 1;
+}
+
+static char
+lmacro_replacereader (LexState *ls, const int c)
+{
+    ls->macro.in_reader = 1;
+
+    lua_pushlightuserdata(ls->L, ls);
+    lua_pushcclosure(ls->L, &lmacro_luafunction_next, 1);
+    lua_pushfstring(ls->L, "%c", c);
+
+    if (lua_pcall(ls->L, 2, 1, 0)) {
+        const char *err = lua_tostring(ls->L, -1);
+        lexerror(ls, err, ls->current);
+    }
+
+    if (!lua_isstring(ls->L, -1) || lua_isnumber(ls->L, -1)) {
+        lexerror(ls, "Macro reader must return a string", ls->current);
+    }
+
+    ls->macro.in_reader = 0;
+    lmacro_setmacrobuff(ls);
+    return lmacro_next(ls);
+}
+
 /* 
  * Get the string that replaces a macro string from a function on top of the
  * stack and place that string into the macro buffer.
  */
 static char
-lmacro_replacefunction (LexState *ls)
+lmacro_replacefunction (LexState *ls, int c)
 {
-    const char *replacement = NULL;
-    /* TODO: in recursive next calls, if lexerror occurs, who frees this? */
-    char *argstr = calloc(BUFSIZ, sizeof(char));
-    int i, args = 0;
-    char c;
+    int i = lua_tointeger(ls->L, -1);
+    lua_pop(ls->L, 1);
+    lua_rawgeti(ls->L, LUA_REGISTRYINDEX, i);
+
+    if (lmacro_lua_isreader(ls->L, i))
+        return lmacro_replacereader(ls, c);
 
     /* 
      * The current LexState's buffer can now be dismissed for this
@@ -145,6 +239,11 @@ lmacro_replacefunction (LexState *ls)
     ls->macro.idx = 0;
     ls->macro.buff[0] = '\0';
     ls->macro.has_buff = 0;
+
+    
+    /* TODO: in recursive next calls, if lexerror occurs, who frees this? */
+    char *argstr = calloc(BUFSIZ, sizeof(char));
+    int args = 0;
 
     if (!argstr)
         lexerror(ls, "Not enough memory for macro form", 0);
@@ -199,8 +298,8 @@ lmacro_replacefunction (LexState *ls)
 
     if (lua_pcall(ls->L, args, 1, 0)) {
         free(argstr);
-        replacement = lua_tostring(ls->L, -1);
-        lexerror(ls, replacement, c);
+        const char *err = lua_tostring(ls->L, -1);
+        lexerror(ls, err, c);
     }
 
     if (!lua_isstring(ls->L, -1) || lua_isnumber(ls->L, -1)) {
@@ -252,7 +351,7 @@ lmacro_matchpartial (LexState *ls, char c)
     switch (match) {
         /* current c must be part of macro form, simple or function */
         case MATCH_SUCCESS_FUN:
-            c = lmacro_replacefunction(ls);
+            c = lmacro_replacefunction(ls, c);
             break;
 
         case MATCH_SUCCESS_SMP:
@@ -306,14 +405,14 @@ next (LexState *ls)
     if (!(ls->macro.has_replace || ls->macro.has_buff))
         c = zgetc(ls->z);
 
-    if (ls->in_comment)
+    if (ls->macro.in_comment || ls->macro.in_reader)
         goto setchar;
 
     lmacro_lua_getmacrotable(ls->L);
 
     switch (lmacro_match(ls->L, c)) {
         case MATCH_SUCCESS_FUN:
-            c = lmacro_replacefunction(ls);
+            c = lmacro_replacefunction(ls, c);
             break;
 
         case MATCH_SUCCESS_SMP:
@@ -348,8 +447,8 @@ static inline void
 lmacro_lua_setmacro (lua_State *L, const char *name)
 {
     static char key[2] = {'\0'};
-    int len = strlen(name) - 1;
-    int val = lua_gettop(L) - 1;
+    const int len = strlen(name) - 1;
+    const int val = lua_gettop(L) - 1;
 
     for (int i = 0; i <= len; i++) {
         key[0] = name[i];
@@ -370,6 +469,23 @@ lmacro_lua_setmacro (lua_State *L, const char *name)
         lua_pop(L, 1);
     }
     lua_pop(L, 2); /* macro table and val */
+}
+
+/*
+ * Using each letter as successive keys to tables, get value in macrotable.
+ */
+static inline void 
+lmacro_lua_getmacro (lua_State *L, const char *name)
+{
+    static char key[2] = {'\0'};
+    const int len = strlen(name) - 1;
+    lmacro_lua_getmacrotable(L);
+    for (int i = 0; lua_istable(L, -1) && i <= len; i++) {
+        key[0] = name[i];
+        lua_getfield(L, -1, key);
+        lua_insert(L, -2); /* move gotten field down and pop previous table */
+        lua_pop(L, 1);
+    }
 }
 
 static int
@@ -553,10 +669,17 @@ lmacro_functionform (const char *name, const int is_reader,
         lexerror(ls, err, TK_MACRO);
     }
 
+    /* use reference as value/key in tables */
+    int r = luaL_ref(ls->L, LUA_REGISTRYINDEX);
+    lua_pushinteger(ls->L, r);
+
     lmacro_lua_getmacrotable(ls->L);
     lmacro_lua_setmacro(ls->L, name);
-    if (is_reader)
-        lmacro_lua_setreader(ls->L, name);
+
+    if (is_reader) {
+        lmacro_lua_getmacro(ls->L, name);
+        lmacro_lua_setreader(ls->L);
+    }
     return lmacro_llex(ls, seminfo);
 }
 
@@ -602,12 +725,7 @@ lmacro_parsename (char *name, LexState *ls)
     if (!(lisspace(ls->current) || currIsNewline(ls)))
         lexerror(ls, "Expected macro name", ls->current);
 
-    while (lisspace(ls->current) || currIsNewline(ls)) {
-        if (currIsNewline(ls))
-            inclinenumber(ls); /* calls next internally */
-        else
-            next(ls);
-    }
+    skipwhitespace(ls);
 
     if (ls->current == EOZ)
         lexerror(ls, "Unexpected end of file during macro name", TK_MACRO);
