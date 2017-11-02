@@ -4,7 +4,8 @@
 #include <stdlib.h>
 #include <stdio.h>
 
-#define MACROTABLE "__macro"
+#define MACROTABLE  "__macro"
+#define READERTABLE "__reader"
 
 static int llex (LexState *ls, SemInfo *seminfo);
 static int lmacro_llex (LexState *ls, SemInfo *seminfo);
@@ -26,6 +27,22 @@ lmacro_lua_getmacrotable (lua_State *L)
         lua_setglobal(L, MACROTABLE);
         lua_getglobal(L, MACROTABLE);
     }
+}
+
+/* Set reader's name as key in reader table to `true`. Balances stack. */
+static inline void
+lmacro_lua_setreader (lua_State *L, const char *reader)
+{
+    lua_getglobal(L, READERTABLE);
+    if (lua_isnil(L, -1)) {
+        lua_pop(L, 1);
+        lua_newtable(L);
+        lua_setglobal(L, READERTABLE);
+        lua_getglobal(L, MACROTABLE);
+    }
+    lua_pushboolean(L, 1);
+    lua_setfield(L, -2, reader);
+    lua_pop(L, 1);
 }
 
 /* 
@@ -397,7 +414,8 @@ lmacro_simpleform (const char *name, LexState *ls, SemInfo *seminfo)
  * until the final letter which points to the compiled anonymous function.
  */
 static int
-lmacro_functionform (const char *name, LexState *ls, SemInfo *seminfo)
+lmacro_functionform (const char *name, const int is_reader,
+                     LexState *ls, SemInfo *seminfo)
 {
 #define buff_append(str) \
     if (i + 1 > BUFSIZ) \
@@ -537,21 +555,14 @@ lmacro_functionform (const char *name, LexState *ls, SemInfo *seminfo)
 
     lmacro_lua_getmacrotable(ls->L);
     lmacro_lua_setmacro(ls->L, name);
+    if (is_reader)
+        lmacro_lua_setreader(ls->L, name);
     return lmacro_llex(ls, seminfo);
 }
 
-/*
- * Parse a macro form.
- * Simple macro: macro <name> <string>
- * Function macro: macro <name> ([args|,]+) [<expr>]+ end
- *
- * <name> is any characters in any order except [=*[ and ]=*] both prepended
- * and postpended with a whitespace or newline character.
- */
-static int
-lmacro_define (LexState *ls, SemInfo *seminfo)
+void
+lmacro_parsename (char *name, LexState *ls)
 {
-    char name[BUFSIZ] = {'\0'};
     int i = 0;
 
 #define nameaddchar(c) \
@@ -600,11 +611,30 @@ lmacro_define (LexState *ls, SemInfo *seminfo)
 
     if (ls->current == EOZ)
         lexerror(ls, "Unexpected end of file during macro name", TK_MACRO);
+}
+
+/*
+ * Parse a macro form.
+ * Simple macro: macro <name> <string>
+ * Function macro: macro <name> ([args|,]+) [<expr>]+ end
+ * Reader macro: readermacro <name> (next, curr) [<expr>]+ end
+ *
+ * <name> is any characters in any order except [=*[ and ]=*] both prepended
+ * and postpended with a whitespace or newline character.
+ */
+static int
+lmacro_parse (const int is_reader, LexState *ls, SemInfo *seminfo)
+{
+    char name[BUFSIZ] = {'\0'};
+    lmacro_parsename(name, ls);
 
     if (ls->current == '(')
-        return lmacro_functionform(name, ls, seminfo);
-    else
-        return lmacro_simpleform(name, ls, seminfo);
+        return lmacro_functionform(name, is_reader, ls, seminfo);
+
+    if (is_reader)
+        lexerror(ls, "Expected '(' to start argument list", ls->current);
+
+    return lmacro_simpleform(name, ls, seminfo);
 }
 
 static int
@@ -613,7 +643,10 @@ lmacro_llex (LexState *ls, SemInfo *seminfo)
     int t = llex(ls, seminfo);
     switch (t) {
         case TK_MACRO:
-            t = lmacro_define(ls, seminfo);
+            t = lmacro_parse(0, ls, seminfo);
+            break;
+        case TK_READERMACRO:
+            t = lmacro_parse(1, ls, seminfo);
             break;
     }
     return t;

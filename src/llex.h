@@ -30,7 +30,7 @@ enum RESERVED {
   TK_GOTO, TK_IF, TK_IN, TK_LOCAL, TK_NIL, TK_NOT, TK_OR, TK_REPEAT,
   TK_RETURN, TK_THEN, TK_TRUE, TK_UNTIL, TK_WHILE,
   /* macro symbols */
-  TK_MACRO,
+  TK_MACRO, TK_READERMACRO,
   /* other terminal symbols */
   TK_IDIV, TK_CONCAT, TK_DOTS, TK_EQ, TK_GE, TK_LE, TK_NE,
   TK_SHL, TK_SHR,
@@ -39,7 +39,7 @@ enum RESERVED {
 };
 
 /* number of reserved words */
-#define NUM_RESERVED	(cast(int, TK_MACRO-FIRST_RESERVED+1))
+#define NUM_RESERVED	(cast(int, TK_READERMACRO-FIRST_RESERVED+1))
 
 
 typedef union {

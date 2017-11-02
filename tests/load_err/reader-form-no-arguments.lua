@@ -1,0 +1,3 @@
+readermacro '
+    return "foo"
+end
