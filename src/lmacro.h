@@ -20,6 +20,8 @@ static int lmacro_llex (LexState *ls, SemInfo *seminfo);
 static void next (LexState *ls);
 static void inclinenumber (LexState *ls);
 static int skip_sep (LexState *ls);
+static void read_long_string (LexState *ls, SemInfo *seminfo, int sep);
+static void read_string (LexState *ls, int del, SemInfo *seminfo);
 extern int luaL_loadbufferx (lua_State *, const char *, size_t,
                              const char *, const char *);
 extern int luaL_ref(lua_State *L, const int);
@@ -155,65 +157,142 @@ lmacro_replacesimple (LexState *ls)
 static int
 lmacro_luafunction_next (lua_State *L)
 {
-    int do_collect = 0;
     LexState *ls = lua_touserdata(L, lua_upvalueindex(1));
     if (!ls) {
         lua_pushstring(L, "Lua's lexical state doesn't exist");
         lua_error(L);
     }
-    if (lua_isboolean(L, -1)) {
-        do_collect = lua_toboolean(L, -1);
-        lua_pop(L, 1);
+    if (ls->current == EOZ) {
+        lua_pushstring(L, "Unexpected end of file in reader macro");
+        lua_error(L);
     }
-    /* if passing 'true' into function, collect chars by whitespace */
-    if (do_collect) {
-        char buff[BUFSIZ] = {'\0'};
-        int i = 0;
-        skipwhitespace(ls);
-        while (!(lisspace(ls->current) || currIsNewline(ls))) {
-            if (ls->current == EOZ) {
-                lua_pushstring(L, "Unexpected end of file in reader macro");
-                lua_error(L);
-            }
-            if (i + 1 >= BUFSIZ) {
-                lua_pushstring(L, "Reader macro will overflow buffer");
-                lua_error(L);
-            }
-            buff[i++] = ls->current;
-            next(ls);
-        }
-        lua_pushstring(ls->L, buff);
-    } else {
-        next(ls);
-        if (ls->current == EOZ) {
-            lua_pushstring(L, "Unexpected end of file in reader macro");
-            lua_error(L);
-        }
-        lua_pushfstring(ls->L, "%c", ls->current);
+    ls->current = zgetc(ls->z);
+    if (ls->current == EOZ) {
+        lua_pushstring(L, "Unexpected end of file in reader macro");
+        lua_error(L);
     }
+    lua_pushfstring(ls->L, "%c", ls->current);
     return 1;
 }
 
+static int
+lmacro_luafunction_curr (lua_State *L)
+{
+    LexState *ls = lua_touserdata(L, lua_upvalueindex(1));
+    if (!ls) {
+        lua_pushstring(L, "Lua's lexical state doesn't exist");
+        lua_error(L);
+    }
+    lua_pushfstring(ls->L, "%c", ls->current);
+    return 1;
+}
+
+static int
+lmacro_luafunction_word (lua_State *L)
+{
+#define getcharsmatching(match) \
+{ \
+    if (match(ls->current)) { \
+        do { \
+            if (i + 1 >= BUFSIZ) { \
+                lua_pushstring(L, "Reader macro will overflow buffer"); \
+                lua_error(L); \
+            } \
+            if (ls->current == EOZ) { \
+                lua_pushstring(L, "Unexpected end of file in reader macro"); \
+                lua_error(L); \
+            } \
+            buff[i++] = ls->current; \
+            ls->current = zgetc(ls->z); \
+        } while (ls->current != c && \
+                 !lisspace(ls->current) && \
+                 match(ls->current)); \
+        goto exit; \
+    } \
+}
+
+    int i = 0;
+    char c = '\0';
+    char buff[BUFSIZ] = {'\0'};
+    LexState *ls = lua_touserdata(L, lua_upvalueindex(1));
+
+    if (!ls) {
+        lua_pushstring(L, "Lua's lexical state doesn't exist");
+        lua_error(L);
+    }
+
+    if (lua_isstring(L, -1)) {
+        const char *s = lua_tostring(L, -1);
+        if (!s) {
+            lua_pushstring(L, "String cannot be null to `nextw`.");
+            lua_error(L);
+        }
+        c = s[0];
+        if (ls->current == c) {
+            ls->current = zgetc(ls->z);
+            buff[0] = c;
+            goto exit;
+        }
+    }
+
+    if (ls->current == EOZ) {
+        lua_pushstring(L, "Unexpected end of file in reader macro");
+        lua_error(L);
+    }
+
+    skipwhitespace(ls);
+
+    if (ls->current == EOZ) {
+        lua_pushstring(L, "Unexpected end of file in reader macro");
+        lua_error(L);
+    }
+
+    getcharsmatching(lislalpha);
+    getcharsmatching(lisdigit);
+    getcharsmatching(lispunct);
+
+exit:
+    lua_pushstring(L, buff);
+    return 1;
+}
+
+/*
+ * Push next function to reader macro along with the current character which
+ * should be the last character of the reader macro's name.
+ */
 static char
 lmacro_replacereader (LexState *ls, const int c)
 {
+    next(ls); /* remove current char which matches last char of macro name */
     ls->macro.in_reader = 1;
 
     lua_pushlightuserdata(ls->L, ls);
     lua_pushcclosure(ls->L, &lmacro_luafunction_next, 1);
-    lua_pushfstring(ls->L, "%c", c);
 
-    if (lua_pcall(ls->L, 2, 1, 0)) {
+    lua_pushlightuserdata(ls->L, ls);
+    lua_pushcclosure(ls->L, &lmacro_luafunction_curr, 1);
+
+    lua_pushlightuserdata(ls->L, ls);
+    lua_pushcclosure(ls->L, &lmacro_luafunction_word, 1);
+
+    if (lua_pcall(ls->L, 3, 1, 0)) {
         const char *err = lua_tostring(ls->L, -1);
-        lexerror(ls, err, ls->current);
+        lexerror(ls, err, c);
     }
 
     if (!lua_isstring(ls->L, -1) || lua_isnumber(ls->L, -1)) {
-        lexerror(ls, "Macro reader must return a string", ls->current);
+        lexerror(ls, "Macro reader must return a string", c);
     }
 
     ls->macro.in_reader = 0;
     lmacro_setmacrobuff(ls);
+
+    if (ls->z->p - 1 != NULL) {
+        ls->z->p--;
+        ls->z->n++;
+        *((char*)ls->z->p) = ls->current;
+    }
+
     return lmacro_next(ls);
 }
 
@@ -489,19 +568,6 @@ lmacro_lua_getmacro (lua_State *L, const char *name)
 }
 
 static int
-lmacro_tokenhasend (int t)
-{
-    switch (t) {
-        case TK_DO:
-        case TK_THEN:
-        case TK_FUNCTION:
-            return 1;
-        default:
-            return 0;
-    }
-}
-
-static int
 lmacro_simpleform (const char *name, LexState *ls, SemInfo *seminfo)
 {
     const char *def = NULL;
@@ -521,145 +587,162 @@ lmacro_simpleform (const char *name, LexState *ls, SemInfo *seminfo)
     return lmacro_llex(ls, seminfo);
 }
 
+static inline void
+lmacro_checkbuffer (LexState *ls, const int index, const int plus)
+{
+    if (index + plus > BUFSIZ)
+        lexerror(ls, 
+                "Macro function form not allowed to overflow buffer", TK_MACRO);
+}
+
 /*
- * Read the function macro function as an anonymous function into Lua. Let Lua
- * compile the function as a string and output any errors. We simply uses a 
- * combination of the lexer, char tokens, and string representations of
- * reserved keywords to build the function while also parsing it.
- * Uses the name of the macro and pushes each letter as a key to a new table
- * until the final letter which points to the compiled anonymous function.
+ * Have a buffer for whitespace delimited chunks. While reading into the buffer
+ * check the value of ls->current for parenthesis, opened and closed.  Check
+ * the chunks for 'end','then', 'do', etc to make sure the end's are balanced.
  */
 static int
 lmacro_functionform (const char *name, const int is_reader,
                      LexState *ls, SemInfo *seminfo)
 {
-#define buff_append(str) \
-    if (i + 1 > BUFSIZ) \
-        lexerror(ls, "Macro form not allowed to overflow buffer", TK_MACRO); \
-    len = strlen(str); \
-    i += len; \
-    strncat(buffer, str, len); \
-    buffer[i] = '\0'; \
-    str = NULL;
-
-    /* Can't be static for some reason. Search for COMPILER */
-    const char *ret_form = "return function (";
+    static const char *ret_form = "return function";
+    char buff[BUFSIZ] = {'\0'};
     const char *str = NULL;
-    char buffer[BUFSIZ] = {0};
-    int parens = 1; /* we skip past '(' that brought us into this function */
-    int ends = 1; /* macro function expects end */
-    int len = 0;
-    int i = 0;
-    int t;
+    int len = 15; /* ret_form length */
+    int index = len;
+    int start = 0;
+    int parens = 0;
+    int ends = 1;
+    int in_scomment = 0;
+    int in_lcomment = 0;
 
-    buff_append(ret_form);
+    strncpy(buff, ret_form, len);
 
-    while (ends > 0 || parens > 0) {
+    while (1) {
+reset:
+        luaZ_resetbuffer(ls->buff);
+        start = index;
         str = NULL;
 
-        if (currIsNewline(ls))
-            inclinenumber(ls); /* this calls `next` a bunch */
-        else
+        /* grab all non-whitespace characters into the buffer */
+        while (!lisspace(ls->current)) {
+            switch (ls->current) {
+                case '(': parens++; break;
+                case ')': parens--; break;
+                case EOZ:
+                    lexerror(ls,
+                            "Unexpected end of file in macro form", TK_MACRO);
+                    break;
+            }
+
+            /* don't parse strings inside comments */
+            if (!(in_lcomment || in_scomment)) {
+                int strc = 0;
+                int seps = 0;
+
+                /* 
+                 * look for string literals and it all. we don't need to look
+                 * inside strings and test for 'do', 'end', etc.
+                 */
+                switch (ls->current) {
+                    case '[':
+                        seps = skip_sep(ls);
+                        if (seps >= 0)
+                            read_long_string(ls, seminfo, seps);
+                        else if (seps != -1)
+                            lexerror(ls,
+                                    "invalid long string delimiter", TK_STRING);
+                        else
+                            break; /* just a '[' character */
+                        str = getstr(seminfo->ts);
+                        break;
+
+                    case '"': case '\'':
+                        strc = ls->current;
+                        read_string(ls, ls->current, seminfo);
+                        str = getstr(seminfo->ts);
+                        break;
+                }
+
+                if (str) {
+                    /* preprend string designator */
+                    if (strc != 0) {
+                        lmacro_checkbuffer(ls, index, 1);
+                        buff[index++] = strc;
+                    } else {
+                        lmacro_checkbuffer(ls, index, seps + 2);
+                        buff[index++] = '[';
+                        for (len = 0; len < seps; len++)
+                            buff[index++] = '=';
+                        buff[index++] = '[';
+                    }
+
+                    len = strlen(str);
+                    lmacro_checkbuffer(ls, index, len);
+                    strncat(buff, str, len);
+                    index += len;
+
+                    /* append string designator */
+                    if (strc != 0) {
+                        lmacro_checkbuffer(ls, index, 1);
+                        buff[index++] = strc;
+                    } else {
+                        lmacro_checkbuffer(ls, index, seps + 2);
+                        buff[index++] = ']';
+                        for (len = 0; len < seps; len++)
+                            buff[index++] = '=';
+                        buff[index++] = ']';
+                    }
+
+                    /* ls->current needs to be retested */
+                    goto reset;
+                }
+            }
+
+            lmacro_checkbuffer(ls, index, 1);
+            buff[index++] = ls->current;
             next(ls);
-        t = llex(ls, seminfo);
-
-        if (t == TK_EOS)
-            lexerror(ls, "Unexpected end of input in macro form", TK_MACRO);
-
-        switch (t) {
-            case ')': str = ")"; break;
-            case '(': str = "("; break;
-            case '+': str = "+"; break;
-            case '-': str = "-"; break;
-            case '/': str = "/"; break;
-            case '*': str = "*"; break;
-            case ',': str = ","; break;
-            case '.': str = "."; break;
-            case ':': str = ":"; break;
-            case '[': str = "["; break;
-            case ']': str = "]"; break;
-            case '=': str = "="; break;
-            case '<': str = "<"; break;
-            case '>': str = ">"; break;
-            case '~': str = "~"; break;
-
-            /* all the reserved keywords and symbols */
-            case TK_GOTO:   case TK_IF:    case TK_IN:   case TK_LOCAL:
-            case TK_NIL:    case TK_NOT:   case TK_OR:   case TK_REPEAT:
-            case TK_RETURN: case TK_THEN:  case TK_TRUE: case TK_UNTIL:
-            case TK_WHILE:  case TK_MACRO: case TK_IDIV: case TK_CONCAT:
-            case TK_DOTS:   case TK_EQ:    case TK_GE:   case TK_LE:
-            case TK_NE:     case TK_SHL:   case TK_SHR:  case TK_DBCOLON:
-            case TK_EOS:
-                str = luaX_tokens[t - FIRST_RESERVED];
-                break;
-
-            case TK_INT:
-                i += snprintf(buffer+i, BUFSIZ-i, "%d", (int)seminfo->i);
-                buffer[i] = '\0';
-                break;
-
-            case TK_FLT:
-                i += snprintf(buffer+i, BUFSIZ-i, "%f", (float)seminfo->r);
-                buffer[i] = '\0';
-                break;
-
-            case TK_NAME:
-            case TK_STRING:
-            default:
-                str = getstr(seminfo->ts);
-                break;
         }
 
-        /* 
-         * TODO: code 'quote' form will take care of string ambiguity here so
-         * that we will have a single representation for strings that should be
-         * code.
-         */
-        if (t == TK_STRING) {
-            buffer[i] = '[';
-            buffer[i+1] = '[';
-            buffer[i+2] = '\0';
-            i += 2;
+        /* skip line comments */
+        if (strncmp(buff + start, "--", 2) == 0)
+            in_scomment = 1;
+        if (strncmp(buff + start, "--[[", 4) == 0)
+            in_lcomment = 1;
+        if (strncmp(buff + start, "--]]", 4) == 0)
+            in_lcomment = 0;
+
+        int len = index - start;
+        if (len > 1 && !(in_lcomment || in_scomment)) {
+            if (strncmp(buff + start, "do", len) == 0
+                || strncmp(buff + start, "function", len) == 0
+                || strncmp(buff + start, "then", len) == 0)
+                ends++;
+            else if (strncmp(buff + start, "end", len) == 0)
+                ends--;
         }
 
-        /* TODO: COMPILER
-         * I think there's a weird compiler error with gcc 4.9.2. If I
-         * take out the brackets after the if statement then the program will
-         * segfault when parsing macro functions with numbers. Stepping through
-         * gdb shows no if statement and directly doing buff_append on a NULL
-         * string. Same with the following if clause:
-         *  if (!(t == TK_INT || t == TK_FLT)) { }
-         */
-        if (str != NULL) {
-            buff_append(str);
-        }
+        if (parens == 0 && ends == 0)
+            break;
 
-        if (t == TK_STRING) {
-            buffer[i] = ']';
-            buffer[i+1] = ']';
-            buffer[i+2] = '\0';
-            i += 2;
-        }
-
-        buffer[i] = ls->current;
-        buffer[i + 1] = '\0';
-        i++;
-
-        if (lmacro_tokenhasend(t))
-            ends++;
-        if (t == TK_END)
-            ends--;
-        if (t == '(' || ls->current == '(')
-            parens++;
-        if (t == ')' || ls->current == ')')
-            parens--;
+        /* grab whitespace characters into buffer */
+        do {
+            lmacro_checkbuffer(ls, index, 1);
+            buff[index++] = ls->current;
+            if (currIsNewline(ls)) {
+                if (in_scomment)
+                    in_scomment = 0;
+                inclinenumber(ls); /* this calls `next` a bunch */
+            } else {
+                next(ls);
+            }
+            if (ls->current == EOZ)
+                lexerror(ls, "Unexpected end of file in macro form", TK_MACRO);
+        } while (lisspace(ls->current));
     }
 
-    if (!(currIsNewline(ls) || ls->current == ';'))
-        lexerror(ls, "Expected end of macro definition", TK_MACRO);
+    next(ls);
 
-    if (luaL_loadbufferx(ls->L, buffer, i, name, "text") != 0) {
+    if (luaL_loadbufferx(ls->L, buff, index, name, "text") != 0) {
         const char *err = lua_tostring(ls->L, -1);
         lexerror(ls, err, TK_MACRO);
     }

@@ -61,6 +61,8 @@
 #define lisprint(c)	testprop(c, MASK(PRINTBIT))
 #define lisxdigit(c)	testprop(c, MASK(XDIGITBIT))
 
+#define lispunct(c) (lisprint(c) && !lislalnum(c))
+
 /*
 ** this 'ltolower' only works for alphabetic characters
 */
@@ -85,6 +87,7 @@ LUAI_DDEC const lu_byte luai_ctype_[UCHAR_MAX + 2];
 #define lisdigit(c)	(isdigit(c))
 #define lisspace(c)	(isspace(c))
 #define lisprint(c)	(isprint(c))
+#define lispunct(c)	(ispunct(c))
 #define lisxdigit(c)	(isxdigit(c))
 
 #define ltolower(c)	(tolower(c))
